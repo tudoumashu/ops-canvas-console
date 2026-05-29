@@ -18,7 +18,7 @@ const defaultParams: CanvasImageAngleParams = {
     wideAngle: false,
 };
 
-export function CanvasNodeAngleDialog({ dataUrl, open, onClose, onConfirm }: { dataUrl: string; open: boolean; onClose: () => void; onConfirm: (params: CanvasImageAngleParams) => void }) {
+export function CanvasNodeAngleDialog({ dataUrl, open, confirming = false, onClose, onConfirm }: { dataUrl: string; open: boolean; confirming?: boolean; onClose: () => void; onConfirm: (params: CanvasImageAngleParams) => void }) {
     const [params, setParams] = useState(defaultParams);
 
     useEffect(() => {
@@ -28,7 +28,7 @@ export function CanvasNodeAngleDialog({ dataUrl, open, onClose, onConfirm }: { d
     const update = <Key extends keyof CanvasImageAngleParams>(key: Key, value: CanvasImageAngleParams[Key]) => setParams((current) => ({ ...current, [key]: value }));
 
     return (
-        <Modal title={null} open={open && Boolean(dataUrl)} onCancel={onClose} footer={null} width={860} centered destroyOnHidden>
+        <Modal title={null} open={open && Boolean(dataUrl)} onCancel={confirming ? undefined : onClose} footer={null} width={860} centered destroyOnHidden maskClosable={!confirming}>
             <div className="space-y-5">
                 <div>
                     <h2 className="text-xl font-semibold">AI 多角度</h2>
@@ -42,7 +42,7 @@ export function CanvasNodeAngleDialog({ dataUrl, open, onClose, onConfirm }: { d
                                 <div className="absolute -bottom-6 left-1/2 h-10 w-24 -translate-x-1/2 rounded-full border bg-black/20 backdrop-blur" />
                             </div>
                         </div>
-                        <Button className="w-fit" icon={<RotateCcw className="size-4" />} onClick={() => setParams(defaultParams)}>
+                        <Button className="w-fit" icon={<RotateCcw className="size-4" />} onClick={() => setParams(defaultParams)} disabled={confirming}>
                             重置
                         </Button>
                     </div>
@@ -65,7 +65,7 @@ export function CanvasNodeAngleDialog({ dataUrl, open, onClose, onConfirm }: { d
                     </div>
                 </div>
                 <div className="flex justify-end">
-                    <Button type="primary" size="large" icon={<WandSparkles className="size-4" />} onClick={() => onConfirm(params)}>
+                    <Button type="primary" size="large" icon={<WandSparkles className="size-4" />} loading={confirming} onClick={() => onConfirm(params)}>
                         AI 生成
                     </Button>
                 </div>

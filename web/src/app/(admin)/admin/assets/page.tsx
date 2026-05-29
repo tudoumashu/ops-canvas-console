@@ -15,9 +15,33 @@ const typeOptions = [
     { label: "全部类型", value: "" },
     { label: "文本", value: "text" },
     { label: "图片", value: "image" },
+    { label: "视频", value: "video" },
 ];
 
 const editTypeOptions = typeOptions.slice(1);
+
+const categoryPathOptions = [
+    { label: "通用素材", value: "通用素材" },
+    { label: "通用图片", value: "通用图片" },
+    { label: "文本素材", value: "文本素材" },
+    { label: "视频素材", value: "视频素材" },
+    { label: "角色参考图/标准参考图", value: "角色参考图/标准参考图" },
+    { label: "角色参考图/官方参考图", value: "角色参考图/官方参考图" },
+    { label: "规格图模板", value: "规格图模板" },
+];
+
+const purposeOptions = [
+    { label: "通用", value: "generic" },
+    { label: "标准参考图", value: "standard_reference" },
+    { label: "官方参考图", value: "official_reference" },
+    { label: "规格图模板", value: "spec_template" },
+];
+
+const sourceOptions = [
+    { label: "本地上传", value: "local_upload" },
+    { label: "ai生成", value: "ai_generated" },
+    { label: "云端素材", value: "cloud_asset" },
+];
 
 export default function AdminAssetsPage() {
     const { assets, tags, keyword, kind, tag, page, pageSize, total, isLoading, searchAssets, changeKind, changeTag, changePage, changePageSize, resetFilters, refreshAssets, saveAsset: saveAdminAsset, deleteAsset } = useAdminAssets();
@@ -43,7 +67,12 @@ export default function AdminAssetsPage() {
             ...editingAsset,
             ...value,
             type: nextType,
-            coverUrl: value.coverUrl || (nextType === "image" ? value.url : ""),
+            mediaType: nextType,
+            coverUrl: value.coverUrl || (nextType !== "text" ? value.url : ""),
+            category: value.categoryPath || value.category,
+            categoryPath: value.categoryPath || value.category,
+            purpose: value.purpose === "mockup_base" ? "spec_template" : value.purpose || "generic",
+            source: ["local_upload", "ai_generated", "cloud_asset"].includes(value.source || "") ? value.source : "cloud_asset",
             tags: (value.tagText || "")
                 .split(",")
                 .map((item) => item.trim())
@@ -73,7 +102,7 @@ export default function AdminAssetsPage() {
             title: "类型",
             dataIndex: "type",
             width: 84,
-            render: (_, item) => <Tag>{item.type === "image" ? "图片" : "文本"}</Tag>,
+            render: (_, item) => <Tag>{item.type === "image" ? "图片" : item.type === "video" ? "视频" : "文本"}</Tag>,
         },
         {
             title: "标签",
@@ -89,9 +118,9 @@ export default function AdminAssetsPage() {
         },
         {
             title: "分类",
-            dataIndex: "category",
-            width: 120,
-            render: (_, item) => <Typography.Text type="secondary">{item.category || "未标注"}</Typography.Text>,
+            dataIndex: "categoryPath",
+            width: 180,
+            render: (_, item) => <Typography.Text type="secondary">{item.categoryPath || item.category || "未标注"}</Typography.Text>,
         },
         {
             title: "操作",
@@ -202,14 +231,20 @@ export default function AdminAssetsPage() {
                     <Form.Item name="tagText" label="标签，用逗号分隔">
                         <Input />
                     </Form.Item>
-                    <Form.Item name="category" label="分类">
-                        <Input />
+                    <Form.Item name="categoryPath" label="分类">
+                        <Select options={categoryPathOptions} />
+                    </Form.Item>
+                    <Form.Item name="purpose" label="用途">
+                        <Select options={purposeOptions} />
+                    </Form.Item>
+                    <Form.Item name="source" label="来源">
+                        <Select options={sourceOptions} />
                     </Form.Item>
                     <Form.Item name="description" label="描述">
                         <Input.TextArea rows={3} />
                     </Form.Item>
-                    {formType === "image" ? (
-                        <Form.Item name="url" label="图片 URL" rules={[{ required: true, message: "请输入图片 URL" }]}>
+                    {formType !== "text" ? (
+                        <Form.Item name="url" label={formType === "video" ? "视频 URL" : "图片 URL"} rules={[{ required: true, message: formType === "video" ? "请输入视频 URL" : "请输入图片 URL" }]}>
                             <Input />
                         </Form.Item>
                     ) : (
@@ -230,8 +265,10 @@ export default function AdminAssetsPage() {
                                     {detailAsset.title}
                                 </Typography.Title>
                                 <Space wrap>
-                                    <Tag>{detailAsset.type === "image" ? "图片" : "文本"}</Tag>
-                                    {detailAsset.category ? <Tag>{detailAsset.category}</Tag> : null}
+                                    <Tag>{detailAsset.type === "image" ? "图片" : detailAsset.type === "video" ? "视频" : "文本"}</Tag>
+                                    {detailAsset.categoryPath || detailAsset.category ? <Tag>{detailAsset.categoryPath || detailAsset.category}</Tag> : null}
+                                    {detailAsset.purpose ? <Tag>{detailAsset.purpose}</Tag> : null}
+                                    {detailAsset.source ? <Tag>{detailAsset.source}</Tag> : null}
                                     {(detailAsset.tags || []).map((tag) => (
                                         <Tag key={tag}>{tag}</Tag>
                                     ))}

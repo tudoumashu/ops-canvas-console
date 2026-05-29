@@ -1,0 +1,26 @@
+flowchart LR
+  Browser["Browser UI"] --> NextApp["Next.js App Router"]
+  Browser <--> LocalStore[("localforage / IndexedDB")]
+  NextApp --> Proxy["/api/[...path] proxy"]
+  Proxy --> Gin["Go Gin API"]
+
+  subgraph API["Go backend"]
+    Gin --> Router["router/"]
+    Router --> Middleware["JWT middleware"]
+    Middleware --> Handlers["handler/"]
+    Handlers --> Services["service/"]
+    Services --> Repositories["repository/"]
+  end
+
+  Repositories --> DB[("SQLite / MySQL / PostgreSQL")]
+  Services --> Files[("data/assets + data/video")]
+  Services --> PDD[("/opt/pdd-workflow")]
+  Services --> Models["OpenAI-compatible / Flow2API"]
+  Services --> LinuxDo["Linux.do OAuth"]
+  Services --> GitHubSources["GitHub prompt sources"]
+  Services --> AgentQueue["local agent job map"]
+  LocalAgent["cmd/local-agent"] --> Gin
+
+  Docker["Docker runtime"] --> NextApp
+  Docker --> Gin
+

@@ -1,0 +1,36 @@
+sequenceDiagram
+  participant User as Browser user
+  participant Web as Next.js /api proxy
+  participant API as Go /api/v1
+  participant Auth as UserAuth
+  participant Settings as settings + credits
+  participant Upstream as Model channel
+  participant DB as Database
+  participant FS as Video storage
+
+  User->>Web: POST /api/v1/images or videos
+  Web->>API: proxy request body + Authorization
+  API->>Auth: validate JWT
+  Auth-->>API: AuthUser
+  API->>Settings: read model cost and channel
+  Settings->>DB: load settings and user credits
+  DB-->>Settings: settings + balance
+  Settings-->>API: channel + cost
+  API->>DB: consume credits
+  alt OpenAI-compatible channel
+    API->>Upstream: forward /v1 request
+    Upstream-->>API: upstream response
+  else Flow2API media channel
+    API->>Upstream: /chat/completions style request
+    Upstream-->>API: media URL or content
+    API->>FS: store video if needed
+  end
+  alt upstream success
+    API-->>Web: model response
+    Web-->>User: generated result
+  else upstream failure
+    API->>DB: refund credits
+    API-->>Web: { code: 1, msg }
+    Web-->>User: error message
+  end
+

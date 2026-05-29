@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
-import { navigationTools, type NavigationToolSlug } from "@/constant/navigation-tools";
+import { navigationTools } from "@/constant/navigation-tools";
 import { AppConfigModal } from "@/components/layout/app-config-modal";
 import { GitHubLink } from "@/components/layout/github-link";
 import { MobileNavDrawer } from "@/components/layout/mobile-nav-drawer";
@@ -26,8 +26,7 @@ export function AppTopNav() {
     const user = useUserStore((state) => state.user);
     const isReady = useUserStore((state) => state.isReady);
     const hideHeader = /^\/canvas\/[^/]+/.test(pathname);
-    const slug = pathname.split("/").filter(Boolean)[0];
-    const activeToolSlug = navigationTools.some((tool) => tool.slug === slug) ? (slug as NavigationToolSlug) : undefined;
+    const activeToolSlug = navigationTools.find((tool) => pathname === `/${tool.slug}` || pathname.startsWith(`/${tool.slug}/`))?.slug;
 
     return (
         <>

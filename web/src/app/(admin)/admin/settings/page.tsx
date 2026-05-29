@@ -34,6 +34,11 @@ const emptySettings: AdminSettings = {
             defaultVideoModel: "",
             defaultTextModel: "",
             systemPrompt: "",
+            promptInjection: {
+                image: "",
+                text: "",
+                video: "",
+            },
             allowCustomChannel: true,
         },
         auth: { allowRegister: true, linuxDo: { enabled: false } },
@@ -434,14 +439,33 @@ export default function AdminSettingsPage() {
                                             <Select showSearch allowClear options={publicModels.map((item) => ({ label: item, value: item }))} />
                                         </Form.Item>
                                     </Col>
-                                    <Col span={24}>
-                                        <Form.Item name={["public", "modelChannel", "systemPrompt"]} label="系统提示词">
-                                            <Input.TextArea rows={4} />
-                                        </Form.Item>
-                                    </Col>
-                                    <Col span={24}>
-                                        <Form.Item name={["public", "modelChannel", "allowCustomChannel"]} label="是否允许用户自定义渠道" extra="开启后，前端可提供走后端渠道和用户自定义 baseUrl 直连两种模式" valuePropName="checked">
-                                            <Switch />
+	                                    <Col span={24}>
+	                                        <Form.Item name={["public", "modelChannel", "systemPrompt"]} label="系统提示词">
+	                                            <Input.TextArea rows={4} />
+	                                        </Form.Item>
+	                                    </Col>
+	                                    <Col span={24}>
+	                                        <Form.Item
+	                                            name={["public", "modelChannel", "promptInjection", "image"]}
+	                                            label="图片任务前置注入提示词"
+	                                            extra="仅注入到图片生成/编辑请求开头。用于身份、安全和用途说明，不应写成画面元素。"
+	                                        >
+	                                            <Input.TextArea rows={4} />
+	                                        </Form.Item>
+	                                    </Col>
+	                                    <Col xs={24} md={12}>
+	                                        <Form.Item name={["public", "modelChannel", "promptInjection", "text"]} label="文本任务前置注入提示词">
+	                                            <Input.TextArea rows={3} placeholder="暂留空" />
+	                                        </Form.Item>
+	                                    </Col>
+	                                    <Col xs={24} md={12}>
+	                                        <Form.Item name={["public", "modelChannel", "promptInjection", "video"]} label="视频任务前置注入提示词">
+	                                            <Input.TextArea rows={3} placeholder="暂留空" />
+	                                        </Form.Item>
+	                                    </Col>
+	                                    <Col span={24}>
+	                                        <Form.Item name={["public", "modelChannel", "allowCustomChannel"]} label="是否允许用户自定义渠道" extra="开启后，前端可提供走后端渠道和用户自定义 baseUrl 直连两种模式" valuePropName="checked">
+	                                            <Switch />
                                         </Form.Item>
                                     </Col>
                                     <Col span={24}>
@@ -834,6 +858,10 @@ function normalizePublicSetting(setting: Partial<AdminSettings["public"]> = {}):
             ...(setting.modelChannel || {}),
             availableModels: setting.modelChannel?.availableModels || [],
             modelCosts: normalizeModelCosts(setting.modelChannel?.modelCosts || []),
+            promptInjection: {
+                ...emptySettings.public.modelChannel.promptInjection,
+                ...(setting.modelChannel?.promptInjection || {}),
+            },
         },
         auth: {
             allowRegister: setting.auth?.allowRegister !== false,

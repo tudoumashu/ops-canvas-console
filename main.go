@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"strings"
 
 	"github.com/basketikun/infinite-canvas/config"
 	"github.com/basketikun/infinite-canvas/router"
@@ -15,6 +16,11 @@ func main() {
 	if err := service.EnsureDefaultAdmin(); err != nil {
 		log.Fatal(err)
 	}
+	service.SyncPDDLocalLibraries()
 	service.StartPromptSyncScheduler()
-	log.Fatal(router.New().Run(":" + config.Cfg.Port))
+	addr := config.Cfg.Port
+	if !strings.Contains(addr, ":") {
+		addr = ":" + addr
+	}
+	log.Fatal(router.New().Run(addr))
 }

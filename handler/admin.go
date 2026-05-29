@@ -72,3 +72,15 @@ func AdminSyncPromptCategories(w http.ResponseWriter, r *http.Request) {
 	log.Printf("sync prompt category done category=%s", request.Category)
 	OK(w, categories)
 }
+
+func AdminRebuildManagedPromptLibrary(w http.ResponseWriter, r *http.Request) {
+	log.Printf("rebuild managed prompt library start")
+	categories, err := service.RebuildManagedPromptLibrary()
+	if err != nil {
+		log.Printf("rebuild managed prompt library failed err=%v", err)
+		FailError(w, err)
+		return
+	}
+	log.Printf("rebuild managed prompt library done")
+	OK(w, categories)
+}

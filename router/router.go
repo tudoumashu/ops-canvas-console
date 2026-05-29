@@ -35,9 +35,86 @@ func New() *gin.Engine {
 	})
 	api.GET("/prompts", middleware.OptionalAuth, gin.WrapF(handler.Prompts))
 	api.GET("/assets", middleware.OptionalAuth, gin.WrapF(handler.Assets))
+	api.GET("/assets/pdd-materials/file", middleware.OptionalAuth, gin.WrapF(handler.PDDMaterialFile))
+	api.GET("/assets/local/file", middleware.OptionalAuth, gin.WrapF(handler.LocalAssetFile))
+	api.POST("/local-agent/heartbeat", gin.WrapF(handler.LocalAgentHeartbeat))
+	api.POST("/local-agent/jobs/claim", gin.WrapF(handler.LocalAgentClaimJob))
+	api.POST("/local-agent/jobs/:jobId/complete", func(c *gin.Context) {
+		handler.LocalAgentCompleteJob(c.Writer, c.Request, c.Param("jobId"))
+	})
 	api.POST("/admin/login", gin.WrapF(handler.AdminLogin))
+	pdd := api.Group("/workflows/pdd", middleware.AdminAuth)
+	pdd.GET("/runs", gin.WrapF(handler.PDDRuns))
+	pdd.GET("/runs/:runId/overview", func(c *gin.Context) {
+		handler.PDDRunOverview(c.Writer, c.Request, c.Param("runId"))
+	})
+	pdd.GET("/runs/:runId/products", func(c *gin.Context) {
+		handler.PDDRunProducts(c.Writer, c.Request, c.Param("runId"))
+	})
+	pdd.GET("/runs/:runId/products/:productKey", func(c *gin.Context) {
+		handler.PDDProductDetail(c.Writer, c.Request, c.Param("runId"), c.Param("productKey"))
+	})
+	pdd.GET("/runs/:runId/product-detail", func(c *gin.Context) {
+		handler.PDDProductDetail(c.Writer, c.Request, c.Param("runId"), c.Query("key"))
+	})
+	pdd.GET("/runs/:runId/creative-canvas", func(c *gin.Context) {
+		handler.PDDCreativeCanvas(c.Writer, c.Request, c.Param("runId"), c.Query("key"))
+	})
+	pdd.POST("/runs/:runId/creative-canvas", func(c *gin.Context) {
+		handler.PDDSaveCreativeCanvas(c.Writer, c.Request, c.Param("runId"), c.Query("key"))
+	})
+	pdd.POST("/runs/:runId/creative-canvas/assets", func(c *gin.Context) {
+		handler.PDDCreativeCanvasAsset(c.Writer, c.Request, c.Param("runId"), c.Query("key"))
+	})
+	pdd.POST("/runs/:runId/creative-canvas/apply", func(c *gin.Context) {
+		handler.PDDApplyCreativeCanvas(c.Writer, c.Request, c.Param("runId"), c.Query("key"))
+	})
+	pdd.GET("/runs/:runId/products/:productKey/creative-canvas", func(c *gin.Context) {
+		handler.PDDCreativeCanvas(c.Writer, c.Request, c.Param("runId"), c.Param("productKey"))
+	})
+	pdd.POST("/runs/:runId/products/:productKey/creative-canvas", func(c *gin.Context) {
+		handler.PDDSaveCreativeCanvas(c.Writer, c.Request, c.Param("runId"), c.Param("productKey"))
+	})
+	pdd.POST("/runs/:runId/products/:productKey/creative-canvas/assets", func(c *gin.Context) {
+		handler.PDDCreativeCanvasAsset(c.Writer, c.Request, c.Param("runId"), c.Param("productKey"))
+	})
+	pdd.POST("/runs/:runId/products/:productKey/creative-canvas/apply", func(c *gin.Context) {
+		handler.PDDApplyCreativeCanvas(c.Writer, c.Request, c.Param("runId"), c.Param("productKey"))
+	})
+	pdd.GET("/runs/:runId/file", func(c *gin.Context) {
+		handler.PDDRunFile(c.Writer, c.Request, c.Param("runId"))
+	})
+	pdd.GET("/runs/:runId/log-stream", func(c *gin.Context) {
+		handler.PDDRunLogStream(c.Writer, c.Request, c.Param("runId"))
+	})
+	pdd.GET("/custom-runs", gin.WrapF(handler.PDDCustomWorkflowRuns))
+	pdd.GET("/custom-runs/:runId", func(c *gin.Context) {
+		handler.PDDCustomWorkflowRun(c.Writer, c.Request, c.Param("runId"))
+	})
 
 	admin := api.Group("/admin", middleware.AdminAuth)
+	admin.POST("/workflows/pdd/actions", gin.WrapF(handler.PDDAction))
+	admin.GET("/workflows/pdd/templates", gin.WrapF(handler.PDDWorkflowTemplates))
+	admin.GET("/workflows/pdd/themes", gin.WrapF(handler.PDDWorkflowThemes))
+	admin.POST("/workflows/pdd/templates", gin.WrapF(handler.PDDSaveWorkflowTemplate))
+	admin.GET("/workflows/pdd/templates/:templateId", func(c *gin.Context) {
+		handler.PDDWorkflowTemplate(c.Writer, c.Request, c.Param("templateId"))
+	})
+	admin.POST("/workflows/pdd/templates/:templateId", func(c *gin.Context) {
+		handler.PDDSaveWorkflowTemplateWithID(c.Writer, c.Request, c.Param("templateId"))
+	})
+	admin.DELETE("/workflows/pdd/templates/:templateId", func(c *gin.Context) {
+		handler.PDDDeleteWorkflowTemplate(c.Writer, c.Request, c.Param("templateId"))
+	})
+	admin.POST("/workflows/pdd/templates/:templateId/runs", func(c *gin.Context) {
+		handler.PDDStartWorkflowTemplateRun(c.Writer, c.Request, c.Param("templateId"))
+	})
+	admin.POST("/workflows/pdd/runs/:runId/manual-edits", func(c *gin.Context) {
+		handler.PDDCreateManualEdit(c.Writer, c.Request, c.Param("runId"))
+	})
+	admin.POST("/workflows/pdd/runs/:runId/manual-edits/:editId/apply", func(c *gin.Context) {
+		handler.PDDApplyManualEdit(c.Writer, c.Request, c.Param("runId"), c.Param("editId"))
+	})
 	admin.GET("/users", gin.WrapF(handler.AdminUsers))
 	admin.POST("/users", gin.WrapF(handler.AdminSaveUser))
 	admin.POST("/users/:id/credits", func(c *gin.Context) {
@@ -57,6 +134,7 @@ func New() *gin.Engine {
 	admin.POST("/settings/channel-test", gin.WrapF(handler.AdminTestChannelModel))
 	admin.GET("/prompt-categories", gin.WrapF(handler.AdminPromptCategories))
 	admin.POST("/prompt-categories/sync", gin.WrapF(handler.AdminSyncPromptCategories))
+	admin.POST("/prompt-categories/rebuild-managed", gin.WrapF(handler.AdminRebuildManagedPromptLibrary))
 	admin.GET("/prompts", gin.WrapF(handler.AdminPrompts))
 	admin.POST("/prompts", gin.WrapF(handler.AdminSavePrompt))
 	admin.POST("/prompts/batch-delete", gin.WrapF(handler.AdminDeletePrompts))

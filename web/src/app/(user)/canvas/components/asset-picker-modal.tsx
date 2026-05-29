@@ -29,7 +29,7 @@ export function AssetPickerModal({ open, defaultTab = "my-assets", onInsert, onC
     }, [open, defaultTab]);
 
     return (
-        <Modal title="选择素材" open={open} onCancel={onClose} footer={null} width={860} destroyOnHidden styles={{ body: { padding: "0 24px 24px", minHeight: 480 } }}>
+        <Modal title="素材中心" open={open} onCancel={onClose} footer={null} width={860} destroyOnHidden styles={{ body: { padding: "0 24px 24px", minHeight: 480 } }}>
             <Tabs
                 activeKey={activeTab}
                 onChange={(key) => setActiveTab(key as AssetPickerTab)}

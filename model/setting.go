@@ -27,16 +27,24 @@ type ModelCost struct {
 	Credits int    `json:"credits"`
 }
 
+// PromptInjectionSetting 按任务类型给模型调用自动追加的前置上下文。
+type PromptInjectionSetting struct {
+	Image string `json:"image"`
+	Text  string `json:"text"`
+	Video string `json:"video"`
+}
+
 // PublicModelChannelSetting 公开模型渠道配置。
 type PublicModelChannelSetting struct {
-	AvailableModels    []string    `json:"availableModels"`
-	ModelCosts         []ModelCost `json:"modelCosts"`
-	DefaultModel       string      `json:"defaultModel"`
-	DefaultImageModel  string      `json:"defaultImageModel"`
-	DefaultVideoModel  string      `json:"defaultVideoModel"`
-	DefaultTextModel   string      `json:"defaultTextModel"`
-	SystemPrompt       string      `json:"systemPrompt"`
-	AllowCustomChannel *bool       `json:"allowCustomChannel"`
+	AvailableModels    []string               `json:"availableModels"`
+	ModelCosts         []ModelCost            `json:"modelCosts"`
+	DefaultModel       string                 `json:"defaultModel"`
+	DefaultImageModel  string                 `json:"defaultImageModel"`
+	DefaultVideoModel  string                 `json:"defaultVideoModel"`
+	DefaultTextModel   string                 `json:"defaultTextModel"`
+	SystemPrompt       string                 `json:"systemPrompt"`
+	PromptInjection    PromptInjectionSetting `json:"promptInjection"`
+	AllowCustomChannel *bool                  `json:"allowCustomChannel"`
 }
 
 // PublicSetting 公开配置。

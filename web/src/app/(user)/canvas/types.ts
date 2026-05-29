@@ -34,6 +34,7 @@ export type CanvasNodeMetadata = {
     count?: number;
     seconds?: string;
     vquality?: string;
+    videoReferenceMode?: string;
     references?: string[];
     naturalWidth?: number;
     naturalHeight?: number;
@@ -48,6 +49,15 @@ export type CanvasNodeMetadata = {
     storageKey?: string;
     mimeType?: string;
     bytes?: number;
+    artifactPath?: string;
+    artifactKind?: string;
+    parentNodeId?: string;
+    originWorkflowNodeId?: string;
+    workflowNodeId?: string;
+    generationKind?: string;
+    source?: string;
+    operation?: string;
+    appliedAt?: string;
 };
 
 export type CanvasNodeData = {

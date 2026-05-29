@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Modal, Segmented, Tooltip } from "antd";
-import { Camera, Download, FolderPlus, Image as ImageIcon, Info, Lock, LockOpen, Maximize2, MessageSquare, Minus, Pencil, Plus, RefreshCw, Scissors, Settings2, Trash2, Upload, Video } from "lucide-react";
+import { Camera, CheckCircle2, Download, FolderPlus, Image as ImageIcon, Info, Lock, LockOpen, Maximize2, MessageSquare, Minus, Pencil, Plus, RefreshCw, Scissors, Settings2, Trash2, Upload, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes, getDataUrlByteSize } from "@/lib/image-utils";
@@ -27,6 +27,7 @@ type CanvasNodeHoverToolbarProps = {
     onAngle: (node: CanvasNodeData) => void;
     onViewImage: (node: CanvasNodeData) => void;
     onRetry: (node: CanvasNodeData) => void;
+    onApplyToWorkflow?: (node: CanvasNodeData) => void;
     onToggleFreeResize: (node: CanvasNodeData) => void;
     onDelete: (node: CanvasNodeData) => void;
 };
@@ -49,13 +50,37 @@ export function CanvasNodeHoverToolbar({
     onAngle,
     onViewImage,
     onRetry,
+    onApplyToWorkflow,
     onToggleFreeResize,
     onDelete,
 }: CanvasNodeHoverToolbarProps) {
+    const toolbarRef = useRef<HTMLDivElement>(null);
+    const [screenSize, setScreenSize] = useState({ width: 0, height: 0 });
+    const [toolbarSize, setToolbarSize] = useState({ width: 0, height: 48 });
+
+    useEffect(() => {
+        const updateBounds = () => {
+            setScreenSize({ width: window.innerWidth, height: window.innerHeight });
+            const rect = toolbarRef.current?.getBoundingClientRect();
+            if (rect) setToolbarSize({ width: rect.width, height: rect.height });
+        };
+        updateBounds();
+        window.addEventListener("resize", updateBounds);
+        return () => window.removeEventListener("resize", updateBounds);
+    }, [node?.id]);
+
     if (!node) return null;
 
-    const left = viewport.x + (node.position.x + node.width / 2) * viewport.k;
-    const top = viewport.y + node.position.y * viewport.k - 14;
+    const screenWidth = screenSize.width || 1200;
+    const screenHeight = screenSize.height || 720;
+    const nodeLeft = viewport.x + node.position.x * viewport.k;
+    const nodeTop = viewport.y + node.position.y * viewport.k;
+    const nodeBottom = nodeTop + node.height * viewport.k;
+    const preferredLeft = nodeLeft + (node.width * viewport.k) / 2 - toolbarSize.width / 2;
+    const left = Math.min(Math.max(preferredLeft, 8), Math.max(8, screenWidth - toolbarSize.width - 8));
+    const aboveTop = nodeTop - toolbarSize.height - 14;
+    const belowTop = nodeBottom + 14;
+    const top = aboveTop >= 8 ? aboveTop : belowTop + toolbarSize.height <= screenHeight - 8 ? belowTop : Math.max(8, Math.min(screenHeight - toolbarSize.height - 8, nodeTop - 8));
     const isImage = node.type === CanvasNodeType.Image;
     const isVideo = node.type === CanvasNodeType.Video;
     const hasImage = isImage && Boolean(node.metadata?.content);
@@ -64,11 +89,14 @@ export function CanvasNodeHoverToolbar({
     const isConfig = node.type === CanvasNodeType.Config;
     const canOpenDialog = isText || hasImage || isVideo;
     const canRetry = node.metadata?.status === "error";
+    const canApplyToWorkflow = Boolean(onApplyToWorkflow && (node.metadata?.originWorkflowNodeId || node.metadata?.workflowNodeId));
     const hasSpecificTools = canRetry || isText || isImage || isVideo || isConfig;
 
     return (
         <div
-            className="absolute z-[70] flex h-12 -translate-x-1/2 -translate-y-full items-center overflow-visible rounded-[18px] border border-black/10 bg-white text-[15px] text-[#242529] shadow-[0_8px_28px_rgba(15,23,42,.12)]"
+            ref={toolbarRef}
+            data-node-toolbar="true"
+            className="absolute z-[70] flex h-12 max-w-[calc(100vw-16px)] items-center overflow-x-auto overflow-y-visible rounded-[18px] border border-black/10 bg-white text-[15px] text-[#242529] shadow-[0_8px_28px_rgba(15,23,42,.12)]"
             style={{ left, top }}
             onMouseEnter={() => onKeep(node.id)}
             onMouseLeave={onLeave}
@@ -79,12 +107,13 @@ export function CanvasNodeHoverToolbar({
             <ToolbarAction title="移除节点" label="删除" icon={<Trash2 className="size-4" />} onClick={() => onDelete(node)} danger />
             {hasSpecificTools ? <ToolbarDivider /> : null}
             {canRetry ? <ToolbarAction title="重新生成" label="重试" icon={<RefreshCw className="size-4" />} onClick={() => onRetry(node)} /> : null}
+            {canApplyToWorkflow ? <ToolbarAction title="应用副本并重跑下游" label="应用重跑" icon={<CheckCircle2 className="size-4" />} onClick={() => onApplyToWorkflow?.(node)} /> : null}
             {hasImage || hasVideo || isText ? <ToolbarAction title="加入我的素材" label="存素材" icon={<FolderPlus className="size-4" />} onClick={() => onSaveAsset(node)} /> : null}
             {hasImage || hasVideo ? <IconAction title={hasVideo ? "下载视频" : "下载图片"} icon={<Download className="size-5" />} onClick={() => onDownload(node)} /> : null}
             {canOpenDialog ? <ToolbarAction title="编辑" label="编辑" icon={<MessageSquare className="size-4" />} onClick={() => onToggleDialog(node)} /> : null}
             {isText ? <ToolbarAction title="编辑文本" label="编辑文字" icon={<Pencil className="size-4" />} onClick={() => onEditText(node)} /> : null}
             {isText ? <ToolbarAction title="用文本生图" label="生图" icon={<ImageIcon className="size-4" />} onClick={() => onGenerateImage(node)} /> : null}
-            {isConfig ? <ToolbarAction title="生成配置" label="生成配置" icon={<Settings2 className="size-4" />} onClick={() => onInfo(node)} /> : null}
+            {isConfig ? <ToolbarAction title="生成配置" label="生成配置" icon={<Settings2 className="size-4" />} onClick={() => onToggleDialog(node)} /> : null}
             {isText ? <ToolbarAction title="减小字号" label="缩小" icon={<Minus className="size-4" />} onClick={() => onDecreaseFont(node)} /> : null}
             {isText ? <ToolbarAction title="增大字号" label="放大" icon={<Plus className="size-4" />} onClick={() => onIncreaseFont(node)} /> : null}
             {isImage ? <ToolbarAction title={hasImage ? "替换图片" : "上传图片"} label={hasImage ? "替换图片" : "上传图片"} icon={<Upload className="size-4" />} onClick={() => onUpload(node)} /> : null}

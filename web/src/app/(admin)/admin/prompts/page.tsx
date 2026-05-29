@@ -9,6 +9,40 @@ import { useCopyText } from "@/hooks/use-copy-text";
 import type { Prompt } from "@/services/api/prompts";
 import { useAdminPrompts } from "./use-admin-prompts";
 
+const promptDomainOptions = [
+    { label: "图片", value: "image" },
+    { label: "文本", value: "text" },
+    { label: "视频", value: "video" },
+];
+
+const promptStageOptions = [
+    { label: "通用", value: "general" },
+    { label: "图片修复", value: "repair" },
+    { label: "电商主图", value: "main_image" },
+    { label: "电商规格图", value: "spec_image" },
+    { label: "图片质检", value: "quality_review" },
+];
+
+const promptStatusOptions = [
+    { label: "生产", value: "production" },
+    { label: "草稿", value: "draft" },
+    { label: "已废弃", value: "deprecated" },
+    { label: "测试", value: "test" },
+];
+
+const ioTypeOptions = [
+    { label: "文本", value: "text" },
+    { label: "图片", value: "image" },
+    { label: "多图", value: "images" },
+    { label: "JSON", value: "json" },
+    { label: "视频", value: "video" },
+];
+
+function promptStageName(stage = "") {
+    if (!stage) return "";
+    return promptStageOptions.find((item) => item.value === stage)?.label || stage;
+}
+
 export default function AdminPromptsPage() {
     const {
         categories,
@@ -93,9 +127,9 @@ export default function AdminPromptsPage() {
         },
         {
             title: "分类",
-            dataIndex: "category",
+            dataIndex: "stage",
             width: 150,
-            render: (_, item) => <Typography.Text type="secondary">{categoryName(item.category)}</Typography.Text>,
+            render: (_, item) => <Typography.Text type="secondary">{promptStageName(item.stage) || categoryName(item.category)}</Typography.Text>,
         },
         {
             title: "标签",
@@ -219,6 +253,43 @@ export default function AdminPromptsPage() {
                     <Form.Item name="category" label="分类">
                         <Select options={categories.map((item) => ({ label: item.name, value: item.category }))} />
                     </Form.Item>
+                    <Row gutter={12}>
+                        <Col span={12}>
+                            <Form.Item name="domain" label="领域">
+                                <Select options={promptDomainOptions} />
+                            </Form.Item>
+                        </Col>
+                        <Col span={12}>
+                            <Form.Item name="stage" label="阶段">
+                                <Select options={promptStageOptions} />
+                            </Form.Item>
+                        </Col>
+                        <Col span={12}>
+                            <Form.Item name="model" label="模型">
+                                <Input placeholder="例如 gpt-image-2" />
+                            </Form.Item>
+                        </Col>
+                        <Col span={12}>
+                            <Form.Item name="mode" label="模式">
+                                <Input placeholder="例如 general / white_bed_3d" />
+                            </Form.Item>
+                        </Col>
+                        <Col span={8}>
+                            <Form.Item name="inputType" label="输入">
+                                <Select options={ioTypeOptions} />
+                            </Form.Item>
+                        </Col>
+                        <Col span={8}>
+                            <Form.Item name="outputType" label="输出">
+                                <Select options={ioTypeOptions} />
+                            </Form.Item>
+                        </Col>
+                        <Col span={8}>
+                            <Form.Item name="status" label="状态">
+                                <Select options={promptStatusOptions} />
+                            </Form.Item>
+                        </Col>
+                    </Row>
                     <Form.Item name="coverUrl" label="封面 URL">
                         <Input />
                     </Form.Item>
@@ -242,6 +313,10 @@ export default function AdminPromptsPage() {
                                 </Typography.Title>
                                 <Space wrap>
                                     <Tag>{categoryName(detailPrompt.category)}</Tag>
+                                    {detailPrompt.stage ? <Tag>{promptStageName(detailPrompt.stage)}</Tag> : null}
+                                    {detailPrompt.model ? <Tag>{detailPrompt.model}</Tag> : null}
+                                    {detailPrompt.mode ? <Tag>{detailPrompt.mode}</Tag> : null}
+                                    {detailPrompt.inputType && detailPrompt.outputType ? <Tag>{detailPrompt.inputType} → {detailPrompt.outputType}</Tag> : null}
                                     {(detailPrompt.tags || []).map((tag) => (
                                         <Tag key={tag}>{tag}</Tag>
                                     ))}

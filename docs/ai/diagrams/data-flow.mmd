@@ -1,0 +1,39 @@
+flowchart TB
+  subgraph Browser["Browser local state"]
+    CanvasStore["canvas projects"]
+    AssetStore["my assets"]
+    PromptStore["my prompts"]
+    ConfigStore["AI config"]
+    TokenStore["JWT token"]
+    IndexedDB[("localforage")]
+    CanvasStore --> IndexedDB
+    AssetStore --> IndexedDB
+    PromptStore --> IndexedDB
+    ConfigStore --> IndexedDB
+    TokenStore --> IndexedDB
+  end
+
+  subgraph Server["Go API state"]
+    Users["users + credit_logs"]
+    Prompts["prompts"]
+    Assets["assets"]
+    Settings["settings"]
+    Templates["workflow_templates"]
+    Runs["workflow_runs"]
+    DB[("GORM database")]
+    Users --> DB
+    Prompts --> DB
+    Assets --> DB
+    Settings --> DB
+    Templates --> DB
+    Runs --> DB
+  end
+
+  GitHubSources["remote prompt repos"] --> Prompts
+  PDDMaterials[("PDD materials root")] --> Assets
+  ConsoleAssets[("CONSOLE_ASSETS_ROOT")] --> Assets
+  VideoFiles[("VIDEO_STORAGE_ROOT")] --> Browser
+  PDDRuns[("PDD_RUNS_ROOT")] --> Browser
+  Templates --> PDDRuns
+  Browser --> Server
+

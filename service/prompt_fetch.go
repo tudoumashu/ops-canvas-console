@@ -58,6 +58,9 @@ func SyncPromptCategory(category string) ([]model.PromptCategory, error) {
 		if err != nil {
 			return nil, err
 		}
+		for index := range items {
+			items[index] = normalizePromptTaxonomy(items[index])
+		}
 		if err := repository.ReplacePromptCategory(item, items); err != nil {
 			return nil, err
 		}

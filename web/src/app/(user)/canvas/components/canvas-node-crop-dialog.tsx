@@ -20,7 +20,7 @@ const handles: ResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const minSize = 0.06;
 const defaultCrop = { x: 0.12, y: 0.12, width: 0.76, height: 0.76 };
 
-export function CanvasNodeCropDialog({ dataUrl, open, onClose, onConfirm }: { dataUrl: string; open: boolean; onClose: () => void; onConfirm: (crop: CanvasImageCropRect) => void }) {
+export function CanvasNodeCropDialog({ dataUrl, open, confirming = false, onClose, onConfirm }: { dataUrl: string; open: boolean; confirming?: boolean; onClose: () => void; onConfirm: (crop: CanvasImageCropRect) => void }) {
     const boxRef = useRef<HTMLDivElement>(null);
     const [crop, setCrop] = useState<CanvasImageCropRect>(defaultCrop);
     const [locked, setLocked] = useState(false);
@@ -56,7 +56,7 @@ export function CanvasNodeCropDialog({ dataUrl, open, onClose, onConfirm }: { da
     };
 
     return (
-        <Modal title="裁剪图片" open={open && Boolean(dataUrl)} onCancel={onClose} footer={null} width={780} centered destroyOnHidden>
+        <Modal title="裁剪图片" open={open && Boolean(dataUrl)} onCancel={confirming ? undefined : onClose} footer={null} width={780} centered destroyOnHidden maskClosable={!confirming}>
             <div className="space-y-4">
                 <div className="flex justify-center">
                     <div ref={boxRef} className="relative inline-block max-w-full overflow-hidden rounded-lg bg-black select-none">
@@ -90,11 +90,13 @@ export function CanvasNodeCropDialog({ dataUrl, open, onClose, onConfirm }: { da
                 </div>
 
                 <div className="flex items-center justify-end gap-2">
-                    <Button onClick={() => setCrop(defaultCrop)}>重置</Button>
-                    <Button icon={<X className="size-4" />} onClick={onClose}>
+                    <Button onClick={() => setCrop(defaultCrop)} disabled={confirming}>
+                        重置
+                    </Button>
+                    <Button icon={<X className="size-4" />} onClick={onClose} disabled={confirming}>
                         取消
                     </Button>
-                    <Button type="primary" icon={<Check className="size-4" />} onClick={() => onConfirm(crop)}>
+                    <Button type="primary" icon={<Check className="size-4" />} loading={confirming} onClick={() => onConfirm(crop)}>
                         确认裁剪
                     </Button>
                 </div>

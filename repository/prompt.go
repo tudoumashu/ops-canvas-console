@@ -75,6 +75,97 @@ func ListPromptTags(q model.Query) ([]string, error) {
 	return promptTagsFromItems(items), nil
 }
 
+// ListPromptFacets 返回当前提示词查询条件下的结构化筛选项。
+func ListPromptFacets(q model.Query) (model.PromptFacets, error) {
+	db, err := DB()
+	if err != nil {
+		return model.PromptFacets{}, err
+	}
+	q.Normalize()
+	q.Category = ""
+	q.Stage = ""
+	q.Provider = ""
+	q.Model = ""
+	q.Mode = ""
+	q.InputType = ""
+	q.OutputType = ""
+	q.Status = ""
+	q.Tags = nil
+	tx := applyPromptFilters(db.Model(&model.Prompt{}), q)
+	var items []model.Prompt
+	if err := tx.Select("category", "domain", "stage", "provider", "model", "mode", "input_type", "output_type", "status").Find(&items).Error; err != nil {
+		return model.PromptFacets{}, err
+	}
+	categories := map[string]bool{}
+	domains := map[string]bool{}
+	stages := map[string]bool{}
+	providers := map[string]bool{}
+	models := map[string]bool{}
+	modes := map[string]bool{}
+	inputTypes := map[string]bool{}
+	outputTypes := map[string]bool{}
+	statuses := map[string]bool{}
+	for _, item := range items {
+		categories[item.Category] = true
+		domains[item.Domain] = true
+		stages[item.Stage] = true
+		providers[item.Provider] = true
+		models[item.Model] = true
+		modes[item.Mode] = true
+		inputTypes[item.InputType] = true
+		outputTypes[item.OutputType] = true
+		statuses[item.Status] = true
+	}
+	return model.PromptFacets{
+		Categories:  sortedKeys(categories),
+		Domains:     sortedKeys(domains),
+		Stages:      sortedKeys(stages),
+		Providers:   sortedKeys(providers),
+		Models:      sortedKeys(models),
+		Modes:       sortedKeys(modes),
+		InputTypes:  sortedKeys(inputTypes),
+		OutputTypes: sortedKeys(outputTypes),
+		Statuses:    sortedKeys(statuses),
+	}, nil
+}
+
+// ListPromptsNeedingTaxonomy 返回仍缺少结构化分类字段的提示词。
+func ListPromptsNeedingTaxonomy(limit int) ([]model.Prompt, error) {
+	db, err := DB()
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > model.MaxPageSize {
+		limit = model.MaxPageSize
+	}
+	var items []model.Prompt
+	err = db.Where(
+		`domain = '' OR domain IS NULL OR
+		domain NOT IN ? OR
+		stage = '' OR stage IS NULL OR
+		stage NOT IN ? OR
+		provider = '' OR provider IS NULL OR
+		model = '' OR model IS NULL OR
+		mode = '' OR mode IS NULL OR
+		input_type = '' OR input_type IS NULL OR
+		output_type = '' OR output_type IS NULL OR
+		status = '' OR status IS NULL OR
+		(category IN ? AND (domain <> ? OR stage <> ? OR provider <> ? OR model <> ? OR mode <> ? OR input_type <> ? OR output_type <> ? OR status <> ?))`,
+		[]string{"image", "text", "video"},
+		[]string{"general", "repair", "main_image", "spec_image", "quality_review"},
+		remotePromptCategoryCodes(),
+		"image",
+		"general",
+		"openai",
+		"gpt-image-2",
+		"general",
+		"text",
+		"image",
+		"production",
+	).Order("id asc").Limit(limit).Find(&items).Error
+	return items, err
+}
+
 // SavePrompt 保存提示词，并在更新时保留原创建时间。
 func SavePrompt(item model.Prompt) (model.Prompt, error) {
 	db, err := DB()
@@ -85,6 +176,8 @@ func SavePrompt(item model.Prompt) (model.Prompt, error) {
 		return item, err
 	} else if ok && item.CreatedAt == "" {
 		item.CreatedAt = saved.CreatedAt
+	} else if !ok && item.CreatedAt == "" {
+		item.CreatedAt = item.UpdatedAt
 	}
 	item.GithubURL = ""
 	return item, db.Save(&item).Error
@@ -108,6 +201,15 @@ func DeletePrompts(ids []string) error {
 	return db.Delete(&model.Prompt{}, "id IN ?", ids).Error
 }
 
+// DeleteManagedPromptLibraryPrompts 删除系统托管导入的公共提示词。
+func DeleteManagedPromptLibraryPrompts() error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	return db.Delete(&model.Prompt{}, "category IN ? OR id LIKE ?", remotePromptCategoryCodes(), "pdd-production-%").Error
+}
+
 // ReplacePromptCategory 用远程同步结果替换整个提示词分类。
 func ReplacePromptCategory(category model.PromptCategory, items []model.Prompt) error {
 	db, err := DB()
@@ -125,7 +227,13 @@ func ReplacePromptCategory(category model.PromptCategory, items []model.Prompt) 
 			items[i].Category = category.Category
 			items[i].GithubURL = ""
 		}
-		return tx.Create(&items).Error
+		if err := tx.Create(&items).Error; err != nil {
+			return err
+		}
+		if category.Remote {
+			return tx.Model(&model.Prompt{}).Where("category = ?", category.Category).Updates(remotePromptImageTaxonomy()).Error
+		}
+		return nil
 	})
 }
 
@@ -137,6 +245,34 @@ func applyPromptFilters(tx *gorm.DB, q model.Query) *gorm.DB {
 	}
 	if isActivePromptOption(q.Category) {
 		tx = tx.Where("category = ?", q.Category)
+	}
+	if isActivePromptOption(q.Domain) {
+		if q.Domain == "image" {
+			tx = tx.Where("domain = ? OR category IN ?", q.Domain, remotePromptCategoryCodes())
+		} else {
+			tx = tx.Where("domain = ?", q.Domain)
+		}
+	}
+	if isActivePromptOption(q.Stage) {
+		tx = tx.Where("stage = ?", q.Stage)
+	}
+	if isActivePromptOption(q.Provider) {
+		tx = tx.Where("provider = ?", q.Provider)
+	}
+	if isActivePromptOption(q.Model) {
+		tx = tx.Where("model = ?", q.Model)
+	}
+	if isActivePromptOption(q.Mode) {
+		tx = tx.Where("mode = ?", q.Mode)
+	}
+	if isActivePromptOption(q.InputType) {
+		tx = tx.Where("input_type = ?", q.InputType)
+	}
+	if isActivePromptOption(q.OutputType) {
+		tx = tx.Where("output_type = ?", q.OutputType)
+	}
+	if isActivePromptOption(q.Status) {
+		tx = tx.Where("status = ?", q.Status)
 	}
 	return applyPromptTagsFilter(tx, q.Tags)
 }
@@ -156,11 +292,10 @@ func applyPromptTagsFilter(tx *gorm.DB, tags []string) *gorm.DB {
 	if len(tags) == 0 {
 		return tx
 	}
-	condition := tx.Session(&gorm.Session{NewDB: true})
 	for _, tag := range tags {
-		condition = condition.Or(promptJSONTagsContains(tx), tag)
+		tx = tx.Where(promptJSONTagsContains(tx), tag)
 	}
-	return tx.Where(condition)
+	return tx
 }
 
 func promptTagsFromItems(items []model.Prompt) []string {
@@ -192,4 +327,27 @@ func promptJSONTagsContains(tx *gorm.DB) string {
 // isActivePromptOption 判断提示词筛选项有效状态。
 func isActivePromptOption(value string) bool {
 	return value != "" && value != "全部" && value != "all"
+}
+
+func remotePromptCategoryCodes() []string {
+	result := []string{}
+	for _, item := range promptCategories {
+		if item.Remote {
+			result = append(result, item.Category)
+		}
+	}
+	return result
+}
+
+func remotePromptImageTaxonomy() map[string]any {
+	return map[string]any{
+		"domain":      "image",
+		"stage":       "general",
+		"provider":    "openai",
+		"model":       "gpt-image-2",
+		"mode":        "general",
+		"input_type":  "text",
+		"output_type": "image",
+		"status":      "production",
+	}
 }

@@ -4,6 +4,7 @@ import { buildApiUrl, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
+import { isFlowImageModel } from "@/lib/model-presets";
 import { imageToDataUrl } from "@/services/image-storage";
 import type { ReferenceImage } from "@/types/image";
 
@@ -63,6 +64,34 @@ function resolveSize(quality: string, ratio: string): string | undefined {
     return `${width}x${height}`;
 }
 
+function resolveRequestSize(quality: string | undefined, size: string) {
+    const value = size.trim();
+    if (!value || value === "auto") return undefined;
+    if (/^\d+x\d+$/.test(value)) return value;
+    return (quality && resolveSize(quality, value)) || value;
+}
+
+function flowImageGenerationConfig(config: AiConfig, requestSize?: string, quality?: string) {
+    if (!isFlowImageModel(config.model || config.imageModel)) return undefined;
+    const payload: Record<string, string> = {};
+    if (config.size) payload.size = config.size;
+    if (requestSize) payload.requestSize = requestSize;
+    if (quality) payload.quality = quality;
+    const aspectRatio = flowImageAspectRatio(config.size || requestSize || "");
+    if (aspectRatio) payload.aspectRatio = aspectRatio;
+    return payload;
+}
+
+function flowImageAspectRatio(size: string) {
+    const value = size.trim().toLowerCase();
+    if (value === "landscape") return "16:9";
+    if (value === "portrait") return "9:16";
+    if (value === "square") return "1:1";
+    if (value === "four-three") return "4:3";
+    if (value === "three-four") return "3:4";
+    return value.includes(":") ? value : "";
+}
+
 function resolveImageDataUrl(item: Record<string, unknown>) {
     if (typeof item.b64_json === "string" && item.b64_json) {
         return `data:image/png;base64,${item.b64_json}`;
@@ -113,8 +142,8 @@ function parseStreamChunk(chunk: string, onDelta: (value: string) => void) {
 }
 
 function withSystemPrompt(config: AiConfig, prompt: string) {
-    const systemPrompt = config.systemPrompt.trim();
-    return systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
+    const prefixes = [config.systemPrompt, config.imagePromptPrefix].map((item) => item.trim()).filter(Boolean);
+    return prefixes.length ? `${prefixes.join("\n\n")}\n\n${prompt}` : prompt;
 }
 
 function aiApiUrl(config: AiConfig, path: string) {
@@ -146,7 +175,8 @@ function withSystemMessage(config: AiConfig, messages: ChatCompletionMessage[]) 
 export async function requestGeneration(config: AiConfig, prompt: string) {
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const quality = normalizeQuality(config.quality);
-    const pixelSize = quality ? resolveSize(quality, config.size) : undefined;
+    const requestSize = resolveRequestSize(quality, config.size);
+    const generationConfig = flowImageGenerationConfig(config, requestSize, quality);
     try {
         const response = await axios.post<ImageApiResponse>(
             aiApiUrl(config, "/images/generations"),
@@ -155,7 +185,8 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
                 prompt: withSystemPrompt(config, prompt),
                 n,
                 ...(quality ? { quality } : {}),
-                ...(pixelSize ? { size: pixelSize } : {}),
+                ...(requestSize ? { size: requestSize } : {}),
+                ...(generationConfig ? { generation_config: generationConfig } : {}),
                 response_format: "b64_json",
             },
             {
@@ -173,7 +204,8 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[]) {
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const quality = normalizeQuality(config.quality);
-    const pixelSize = quality ? resolveSize(quality, config.size) : undefined;
+    const requestSize = resolveRequestSize(quality, config.size);
+    const generationConfig = flowImageGenerationConfig(config, requestSize, quality);
     const formData = new FormData();
     formData.set("model", config.model);
     formData.set("prompt", withSystemPrompt(config, prompt));
@@ -182,8 +214,11 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     if (quality) {
         formData.set("quality", quality);
     }
-    if (pixelSize) {
-        formData.set("size", pixelSize);
+    if (requestSize) {
+        formData.set("size", requestSize);
+    }
+    if (generationConfig) {
+        formData.set("generation_config", JSON.stringify(generationConfig));
     }
     const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
     files.forEach((file) => formData.append("image", file));

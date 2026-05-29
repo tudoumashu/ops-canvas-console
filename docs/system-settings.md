@@ -19,6 +19,7 @@
     ],
     "defaultModel": "gpt-image-2",
     "defaultImageModel": "gpt-image-2",
+    "defaultVideoModel": "veo_3_1_t2v_fast_landscape",
     "defaultTextModel": "gpt-5.5",
     "systemPrompt": "",
     "allowCustomChannel": true
@@ -45,6 +46,7 @@
 | `modelCosts` | object[] | 模型算力点配置，后端模型接口调用前按模型预扣，上游失败时返还；未配置默认不扣除 |
 | `defaultModel` | string | 默认模型，从 `availableModels` 中选择 |
 | `defaultImageModel` | string | 默认图片模型，从 `availableModels` 中选择 |
+| `defaultVideoModel` | string | 默认视频模型，从 `availableModels` 中选择 |
 | `defaultTextModel` | string | 默认文本模型，从 `availableModels` 中选择 |
 | `systemPrompt` | string | 系统提示词 |
 | `allowCustomChannel` | boolean | 是否允许用户在配置弹窗中切换为本地直连渠道，默认允许 |
@@ -102,7 +104,7 @@
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `protocol` | string | 协议，当前为 `openai` |
+| `protocol` | string | 协议；`openai` 表示 OpenAI 兼容接口，`flow2api` 表示通过 Flow2API 的 `/chat/completions` 媒体返回适配为图片/视频接口 |
 | `name` | string | 渠道名称 |
 | `baseUrl` | string | OpenAI 兼容接口地址 |
 | `apiKey` | string | 渠道密钥 |
@@ -111,7 +113,9 @@
 | `enabled` | boolean | 是否启用 |
 | `remark` | string | 备注 |
 
-后端调用模型时，会从已启用、已配置 `baseUrl` 和 `apiKey`、且 `models` 包含目标模型的渠道中选择一个。
+后端调用模型时，会从已启用、已配置 `baseUrl` 和 `apiKey`、且 `models` 包含目标模型的渠道中选择一个。`flow2api` 渠道目前用于图片和视频模型：后端会把控制台现有的 `/api/v1/images/*`、`/api/v1/videos` 请求转换为 Flow2API 的聊天式媒体请求，并解析返回的图片或视频链接。
+
+Flow2API 视频生成结果会写入 `VIDEO_STORAGE_ROOT`，默认 `data/video`。Docker 部署时该目录应位于持久化 `data/` 卷内，避免容器重启后视频工作台生成结果无法继续预览或下载。
 
 `promptSync` 字段：
 

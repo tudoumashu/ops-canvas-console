@@ -8,16 +8,25 @@ import (
 )
 
 func ListPrompts(q model.Query) (model.PromptList, error) {
+	ensureTaxonomyNormalized()
 	items, total, err := repository.ListPrompts(q)
 	if err != nil {
 		return model.PromptList{}, err
+	}
+	for i := range items {
+		items[i] = normalizePromptTaxonomy(items[i])
 	}
 	tags, err := repository.ListPromptTags(q)
 	if err != nil {
 		return model.PromptList{}, err
 	}
+	facets, err := repository.ListPromptFacets(q)
+	if err != nil {
+		return model.PromptList{}, err
+	}
 	categories := promptCategoryCodes(ListPromptCategories())
-	return model.PromptList{Items: items, Tags: tags, Categories: categories, Total: int(total)}, nil
+	freeTags := uniqueVisibleTags(tags, map[string]bool{})
+	return model.PromptList{Items: items, Tags: freeTags, FreeTags: freeTags, Categories: categories, Facets: facets, Total: int(total)}, nil
 }
 
 func ListPromptCategories() []model.PromptCategory {
@@ -41,6 +50,7 @@ func SavePrompt(item model.Prompt) (model.Prompt, error) {
 		item.Category = category.Category
 	}
 	item.GithubURL = ""
+	item = normalizePromptTaxonomy(item)
 	return repository.SavePrompt(item)
 }
 
@@ -53,6 +63,25 @@ func DeletePrompts(ids []string) error {
 		return nil
 	}
 	return repository.DeletePrompts(ids)
+}
+
+func RebuildManagedPromptLibrary() ([]model.PromptCategory, error) {
+	if err := repository.DeleteManagedPromptLibraryPrompts(); err != nil {
+		return nil, err
+	}
+	for _, category := range repository.PromptCategories() {
+		if !category.Remote {
+			continue
+		}
+		if _, err := SyncPromptCategory(category.Category); err != nil {
+			return nil, err
+		}
+	}
+	normalizeTaxonomyMu.Lock()
+	normalizeTaxonomyDone = false
+	normalizeTaxonomyMu.Unlock()
+	ensureTaxonomyNormalized()
+	return repository.ListPromptCategories()
 }
 
 func promptCategoryCodes(items []model.PromptCategory) []string {

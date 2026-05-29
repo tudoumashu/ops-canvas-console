@@ -23,6 +23,16 @@ func GetSettings() (model.Settings, error) {
 			_ = json.Unmarshal(item.Value, &result.Private)
 		} else if item.Key == model.SettingKeyPublic {
 			_ = json.Unmarshal(item.Value, &result.Public)
+		} else if string(item.Key) == "global" {
+			legacy := model.Settings{}
+			if err := json.Unmarshal(item.Value, &legacy); err == nil {
+				if len(result.Private.Channels) == 0 {
+					result.Private = legacy.Private
+				}
+				if len(result.Public.ModelChannel.AvailableModels) == 0 {
+					result.Public = legacy.Public
+				}
+			}
 		}
 	}
 	return result, nil

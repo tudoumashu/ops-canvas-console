@@ -115,13 +115,13 @@ export function AppConfigModal() {
                     )}
                     <div className="grid gap-4 md:grid-cols-3">
                         <Form.Item label="默认生图模型" className="mb-4">
-                            <ModelPicker config={modelConfig} value={modelConfig.imageModel} onChange={(model) => updateConfig("imageModel", model)} fullWidth />
+                            <ModelPicker config={modelConfig} value={modelConfig.imageModel} modality="image" onChange={(model) => updateConfig("imageModel", model)} fullWidth />
                         </Form.Item>
                         <Form.Item label="默认视频模型" className="mb-4">
-                            <ModelPicker config={modelConfig} value={modelConfig.videoModel} onChange={(model) => updateConfig("videoModel", model)} fullWidth />
+                            <ModelPicker config={modelConfig} value={modelConfig.videoModel} modality="video" onChange={(model) => updateConfig("videoModel", model)} fullWidth />
                         </Form.Item>
                         <Form.Item label="默认文本模型" className="mb-4">
-                            <ModelPicker config={modelConfig} value={modelConfig.textModel} onChange={(model) => updateConfig("textModel", model)} fullWidth />
+                            <ModelPicker config={modelConfig} value={modelConfig.textModel} modality="text" onChange={(model) => updateConfig("textModel", model)} fullWidth />
                         </Form.Item>
                     </div>
                     {effectiveMode === "local" ? (

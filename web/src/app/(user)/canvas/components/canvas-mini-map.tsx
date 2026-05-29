@@ -6,7 +6,19 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasNodeData, type ViewportTransform } from "../types";
 
-export function Minimap({ nodes, viewport, viewportSize, onViewportChange }: { nodes: CanvasNodeData[]; viewport: ViewportTransform; viewportSize: { width: number; height: number }; onViewportChange: (viewport: ViewportTransform) => void }) {
+export function Minimap({
+    nodes,
+    viewport,
+    viewportSize,
+    compactNodeGlyphs = false,
+    onViewportChange,
+}: {
+    nodes: CanvasNodeData[];
+    viewport: ViewportTransform;
+    viewportSize: { width: number; height: number };
+    compactNodeGlyphs?: boolean;
+    onViewportChange: (viewport: ViewportTransform) => void;
+}) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const containerRef = useRef<HTMLDivElement>(null);
     const [isDragging, setIsDragging] = useState(false);
@@ -115,16 +127,20 @@ export function Minimap({ nodes, viewport, viewportSize, onViewportChange }: { n
             >
                 {nodes.map((node) => {
                     const pos = toMinimap(node.position.x, node.position.y);
+                    const rawWidth = node.width * scale;
+                    const rawHeight = node.height * scale;
+                    const nodeWidth = compactNodeGlyphs ? Math.max(4, Math.min(rawWidth, 34)) : Math.max(rawWidth, 2);
+                    const nodeHeight = compactNodeGlyphs ? Math.max(4, Math.min(rawHeight, 34)) : Math.max(rawHeight, 2);
                     const color = node.type === CanvasNodeType.Image ? "#10b981" : node.type === CanvasNodeType.Config ? "#60a5fa" : theme.node.muted;
                     return (
                         <div
                             key={node.id}
                             className="absolute rounded-[1px]"
                             style={{
-                                left: pos.x,
-                                top: pos.y,
-                                width: Math.max(node.width * scale, 2),
-                                height: Math.max(node.height * scale, 2),
+                                left: pos.x + (rawWidth - nodeWidth) / 2,
+                                top: pos.y + (rawHeight - nodeHeight) / 2,
+                                width: nodeWidth,
+                                height: nodeHeight,
                                 backgroundColor: color,
                                 opacity: 0.8,
                             }}

@@ -106,7 +106,7 @@ export function useAdminPrompts() {
     return {
         categories: categoriesQuery.data || [],
         prompts: data?.items || [],
-        tags: data?.tags || [],
+        tags: data?.freeTags || data?.tags || [],
         keyword,
         category,
         tag,

@@ -1,0 +1,31 @@
+flowchart TB
+  Admin["Admin user"] --> Login["JWT admin session"]
+  Login --> Template["Edit PDD workflow template"]
+  Template --> SaveTemplate["Save workflow_template"]
+  SaveTemplate --> DB[("Database")]
+
+  Admin --> Start["Start template run"]
+  Start --> Inputs["JSON / JSONL inputs"]
+  Inputs --> RunRecord["workflow_run row"]
+  RunRecord --> RunDir[("PDD_RUNS_ROOT/run_id")]
+  RunDir --> Executor["Go goroutine DAG executor"]
+
+  Executor --> ModelChannel["model channel calls"]
+  Executor --> PDDAssets["PDD materials + console assets"]
+  Executor --> NodeOutputs["logs/custom_workflow/products/..."]
+  Executor --> BusinessOutputs["generated/ + 待上架/"]
+
+  Executor -->|"script executor=vps"| VPSCommand["allowlisted VPS script"]
+  Executor -->|"script executor=local_agent"| AgentJob["pending local agent job"]
+  LocalAgent["cmd/local-agent"] --> AgentJob
+  LocalAgent --> LocalScript["local repo script"]
+  LocalScript --> AgentJob
+
+  Admin --> RunPage["Run page"]
+  RunPage --> Overview["DAG overview"]
+  RunPage --> Products["product flow"]
+  RunPage --> CreativeCanvas["creative canvas"]
+  RunPage --> LogStream["SSE log stream"]
+  NodeOutputs --> RunPage
+  BusinessOutputs --> RunPage
+

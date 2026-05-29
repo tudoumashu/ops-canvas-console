@@ -42,6 +42,9 @@ export function PromptCard({
                     </div>
                     <p className="mt-2 line-clamp-3 text-xs leading-5 text-stone-600 dark:text-stone-400">{item.prompt}</p>
                     <div className="mt-3 flex flex-wrap gap-1.5">
+                        <Tag className="m-0 text-[11px]">{promptValueLabel(item.stage)}</Tag>
+                        <Tag className="m-0 text-[11px]">{item.model || "other"}</Tag>
+                        {item.inputType && item.outputType ? <Tag className="m-0 text-[11px]">{item.inputType} → {item.outputType}</Tag> : null}
                         {item.tags.map((tag) => (
                             <Tag key={tag} className="m-0 text-[11px]">
                                 {tag}
@@ -50,12 +53,23 @@ export function PromptCard({
                     </div>
                 </div>
             </button>
-            <div className="flex items-center gap-2 px-4 pb-4">
-                <Button block={actionType === "primary"} type={actionType} size="small" icon={actionIcon} onClick={onCopy}>
+            <div className="flex flex-wrap items-center gap-2 px-4 pb-4 [&_.ant-btn]:min-w-fit">
+                <Button className={actionType === "primary" ? "flex-1" : undefined} type={actionType} size="small" icon={actionIcon} onClick={onCopy}>
                     {actionLabel}
                 </Button>
                 {extraAction}
             </div>
         </Card>
     );
+}
+
+function promptValueLabel(value?: string) {
+    const labels: Record<string, string> = {
+        general: "通用",
+        repair: "图片修复",
+        main_image: "电商主图",
+        spec_image: "电商规格图",
+        quality_review: "图片质检",
+    };
+    return labels[value || ""] || value || "未标注";
 }

@@ -71,7 +71,7 @@ export function useAdminAssets() {
 
     return {
         assets: data?.items || [],
-        tags: data?.tags || [],
+        tags: data?.freeTags || data?.tags || [],
         keyword,
         kind: type,
         tag,

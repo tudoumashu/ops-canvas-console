@@ -44,3 +44,21 @@ func AdminDeleteAsset(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	OK(w, true)
 }
+
+func PDDMaterialFile(w http.ResponseWriter, r *http.Request) {
+	path, err := service.ResolvePDDMaterialFile(r.URL.Query().Get("path"))
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	http.ServeFile(w, r, path)
+}
+
+func LocalAssetFile(w http.ResponseWriter, r *http.Request) {
+	path, err := service.ResolveConsoleAssetFile(r.URL.Query().Get("path"))
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	http.ServeFile(w, r, path)
+}

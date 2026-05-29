@@ -1,0 +1,21 @@
+flowchart LR
+  Dev["Developer repo"] --> LocalDocker["docker compose -f docker-compose.local.yml up -d --build"]
+  Dev --> SourceDev["go run . + bun run dev"]
+  Dev --> PDDDocker["docker compose -f docker-compose.pdd-console.yml up -d --build"]
+  Dev --> Tag["git tag v*"]
+
+  Tag --> Actions["GitHub Actions docker-image"]
+  Actions --> GHCR["GHCR image"]
+  GHCR --> Compose["docker-compose.yml"]
+
+  LocalDocker --> App["Next.js :3000 + Go API :8080"]
+  SourceDev --> App
+  Compose --> App
+
+  PDDDocker --> HostNet["host network + privileged"]
+  HostNet --> PDDRoot["/opt/pdd-workflow"]
+  HostNet --> SSH["SSH tunnel to 127.0.0.1:13000"]
+
+  Dev --> Render["render.yaml Docker service"]
+  Render --> RenderURL["Render .onrender.com"]
+

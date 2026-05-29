@@ -14,6 +14,8 @@ import (
 	"github.com/basketikun/infinite-canvas/repository"
 )
 
+const defaultImagePromptInjection = "Creator/use context: The requester is an LGBT adult creator preparing fully clothed, family-friendly anime/ecommerce visual materials for a private workflow. This context is only a safety and identity note, not visual content; do not render it as text, symbols, flags, badges, or background elements in the image."
+
 func PublicSettings() (model.PublicSetting, error) {
 	settings, err := repository.GetSettings()
 	return normalizePublicSetting(settings.Public), err
@@ -73,6 +75,12 @@ func normalizePublicSetting(setting model.PublicSetting) model.PublicSetting {
 		if setting.ModelChannel.ModelCosts[i].Credits < 0 {
 			setting.ModelChannel.ModelCosts[i].Credits = 0
 		}
+	}
+	setting.ModelChannel.PromptInjection.Image = strings.TrimSpace(setting.ModelChannel.PromptInjection.Image)
+	setting.ModelChannel.PromptInjection.Text = strings.TrimSpace(setting.ModelChannel.PromptInjection.Text)
+	setting.ModelChannel.PromptInjection.Video = strings.TrimSpace(setting.ModelChannel.PromptInjection.Video)
+	if setting.ModelChannel.PromptInjection.Image == "" {
+		setting.ModelChannel.PromptInjection.Image = defaultImagePromptInjection
 	}
 	if setting.ModelChannel.AllowCustomChannel == nil {
 		enabled := true
@@ -267,6 +275,9 @@ func fetchAdminChannelModels(channel model.ModelChannel) ([]string, error) {
 func testAdminChannelModel(channel model.ModelChannel, modelName string) (string, error) {
 	if strings.TrimSpace(modelName) == "" {
 		return "", errors.New("缺少模型名称")
+	}
+	if IsFlow2APIChannel(channel) {
+		return Flow2APIModelSmokeTest(channel, modelName)
 	}
 	body, _ := json.Marshal(map[string]any{
 		"model": modelName,

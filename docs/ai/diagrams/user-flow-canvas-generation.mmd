@@ -1,0 +1,20 @@
+flowchart TB
+  User["User edits canvas"] --> Node["Prompt / image / config node"]
+  Node --> Mode{"channelMode"}
+
+  Mode -->|"local"| BrowserAPI["Browser calls user baseUrl"]
+  BrowserAPI --> LocalModel["OpenAI-compatible API"]
+  LocalModel --> Result["image / text / video result"]
+
+  Mode -->|"remote"| NextProxy["/api/v1 via Next proxy"]
+  NextProxy --> GoAPI["Go AI proxy"]
+  GoAPI --> Credits["consume model credits"]
+  Credits --> Channel["select model channel"]
+  Channel --> RemoteModel["OpenAI-compatible / Flow2API"]
+  RemoteModel --> GoAPI
+  GoAPI --> Result
+
+  Result --> CanvasNode["insert result node"]
+  CanvasNode --> LocalStore[("localforage + local media storage")]
+  CanvasNode --> AssetAction["optional save to my assets"]
+

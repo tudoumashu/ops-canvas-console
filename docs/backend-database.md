@@ -19,6 +19,8 @@
 - `prompts`
 - `assets`
 - `settings`
+- `workflow_templates`
+- `workflow_runs`
 
 后续新增表时再同步补充本文档，未实际使用的规划表不提前写入。
 
@@ -60,11 +62,20 @@
 | `prompt`     | string | 提示词内容                        |
 | `tags`       | json   | 标签列表                         |
 | `category`   | string | 分类标识                         |
+| `domain`     | string | 领域：`general`、`image`、`text`、`video`、`workflow` 等 |
+| `stage`      | string | 阶段：`source_generation`、`quality_review`、`main_image` 等 |
+| `provider`   | string | 模型提供方或来源标识                  |
+| `model`      | string | 推荐模型名                         |
+| `mode`       | string | 模式或工作流模式                      |
+| `input_type` | string | 输入类型：`text`、`image`、`images`、`json`、`video` 等 |
+| `output_type` | string | 输出类型：`text`、`image`、`images`、`json`、`video` 等 |
+| `status`     | string | 状态：`production`、`draft`、`deprecated`、`test` 等 |
+| `metadata`   | json   | 扩展元数据                         |
 | `preview`    | text   | Markdown 展示内容，可包含文本、图片、视频链接等 |
 | `created_at` | string | 创建时间                         |
 | `updated_at` | string | 更新时间                         |
 
-`github_url` 仅用于接口返回，不写入数据库。
+`github_url` 仅用于接口返回，不写入数据库。PDD 工作流生产提示词不再在服务启动时写入该表。
 
 ### assets
 
@@ -75,14 +86,58 @@
 | `id`             | string | 主键                            |
 | `title`          | string | 标题                            |
 | `type`           | string | 素材类型：`text`、`image`、`video` 等 |
+| `media_type`     | string | 媒体类型，供筛选使用                    |
+| `scope`          | string | 作用域：`library` 等                 |
+| `category_path`  | string | 结构化分类路径，如 `角色参考图/标准参考图`    |
+| `purpose`        | string | 用途：`generic`、`standard_reference`、`official_reference`、`spec_template` 等 |
+| `source`         | string | 来源：`cloud_asset`、`local_upload`、`ai_generated` 等 |
 | `cover_url`      | string | 封面图                           |
 | `tags`           | json   | 标签列表                          |
 | `category`       | string | 分类标识                          |
 | `description`    | string | 描述                            |
 | `content`        | text   | 文本或 Markdown 内容               |
 | `url`            | string | 图片、视频等媒体地址                    |
+| `metadata`       | json   | 扩展元数据，如原始路径、IP、角色名等          |
 | `created_at`     | string | 创建时间                          |
 | `updated_at`     | string | 更新时间                          |
+
+工作流素材启动时会以稳定 ID 写入该表。角色参考图使用通用分类路径 `角色参考图/标准参考图` 或 `角色参考图/官方参考图`，`purpose` 分别为 `standard_reference` 或 `official_reference`；控制台固定规格图底版使用 `categoryPath=规格图模板`、`purpose=spec_template`。`url`/`cover_url` 指向受限的本地素材文件读取接口。
+
+### workflow_templates
+
+自定义工作流模板表。当前主要用于 PDD 工作流模板画布，只保存定义，不在编辑画布时调用模型。
+
+| 字段            | 类型     | 说明                                      |
+|---------------|--------|-----------------------------------------|
+| `id`          | string | 主键                                      |
+| `workflow_type` | string | 工作流类型，当前为 `pdd`                     |
+| `title`       | string | 模板标题                                    |
+| `description` | string | 模板说明                                    |
+| `spec`        | json   | 模板 DAG，包含节点、连线、模型、prompt、输出路径和并发设置 |
+| `created_at`  | string | 创建时间                                    |
+| `updated_at`  | string | 更新时间                                    |
+
+`spec.nodes` 当前支持 `material`、`text`、`image`、`video` 四类节点；`operation` 当前支持 `input`、`material_lookup`、`text_static`、`text_generation`、`condition`、`script`、`image_generation`、`image_edit`、`video_generation`。`text_generation` 可通过 `extra.outputFormat=json` 输出结构化 JSON；`spec.edges` 可保存 `fromHandle`、`condition` 和 `loop`，用于 JSONPath 条件分流和受控循环。
+
+### workflow_runs
+
+自定义工作流运行记录表。它只保存运行状态和模板快照；图片、日志和 JSON 产物仍写入 `PDD_RUNS_ROOT/<run_id>`。
+
+| 字段              | 类型     | 说明                               |
+|-----------------|--------|----------------------------------|
+| `id`            | string | run_id，主键                        |
+| `workflow_type` | string | 工作流类型，当前为 `pdd`                |
+| `template_id`   | string | 来源模板 ID                         |
+| `template_title` | string | 来源模板标题冗余                       |
+| `status`        | string | 状态：`idle`、`running`、`success`、`error` |
+| `run_dir`       | string | VPS 上的 run 目录                    |
+| `input_count`   | number | 输入商品数量                          |
+| `completed_count` | number | 已完成商品数量                         |
+| `failed_count`  | number | 失败商品数量                          |
+| `error`         | string | 失败信息，可为空                        |
+| `spec_snapshot` | json   | 启动时的模板快照，用于复现                |
+| `created_at`    | string | 创建时间                            |
+| `updated_at`    | string | 更新时间                            |
 
 ### settings
 

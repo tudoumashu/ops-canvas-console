@@ -16,8 +16,12 @@ export type AiConfig = {
     videoModel: string;
     textModel: string;
     videoSeconds: string;
+    videoReferenceMode: string;
     vquality: string;
     systemPrompt: string;
+    imagePromptPrefix: string;
+    textPromptPrefix: string;
+    videoPromptPrefix: string;
     models: string[];
     quality: string;
     size: string;
@@ -35,8 +39,12 @@ export const defaultConfig: AiConfig = {
     videoModel: "grok-imagine-video",
     textModel: "gpt-5.5",
     videoSeconds: "6",
+    videoReferenceMode: "text",
     vquality: "720",
     systemPrompt: "",
+    imagePromptPrefix: "",
+    textPromptPrefix: "",
+    videoPromptPrefix: "",
     models: [],
     quality: "auto",
     size: "1:1",
@@ -71,6 +79,9 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
         videoModel: models.includes(config.videoModel) ? config.videoModel : modelChannel.defaultVideoModel || fallbackModel,
         textModel: models.includes(config.textModel) ? config.textModel : modelChannel.defaultTextModel || fallbackModel,
         systemPrompt: modelChannel.systemPrompt,
+        imagePromptPrefix: modelChannel.promptInjection?.image || "",
+        textPromptPrefix: modelChannel.promptInjection?.text || "",
+        videoPromptPrefix: modelChannel.promptInjection?.video || "",
     };
 }
 
@@ -112,7 +123,7 @@ export const useConfigStore = create<ConfigStore>()(
             partialize: (state) => ({ config: state.config }),
             merge: (persisted, current) => {
                 const config = { ...defaultConfig, ...((persisted as Partial<ConfigStore>).config || {}) };
-                return { ...current, config: { ...config, channelMode: config.channelMode || "remote", imageModel: config.imageModel || config.model, videoModel: config.videoModel || "grok-imagine-video", textModel: config.textModel || config.model, videoSeconds: config.videoSeconds || "6", vquality: config.vquality || "720" } };
+                return { ...current, config: { ...config, channelMode: config.channelMode || "remote", imageModel: config.imageModel || config.model, videoModel: config.videoModel || "grok-imagine-video", textModel: config.textModel || config.model, videoSeconds: config.videoSeconds || "6", videoReferenceMode: config.videoReferenceMode || "text", vquality: config.vquality || "720" } };
             },
         },
     ),

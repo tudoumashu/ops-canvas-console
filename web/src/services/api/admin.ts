@@ -95,6 +95,14 @@ export async function syncAdminPromptCategory(token: string, category: string) {
 export type AdminPromptQuery = {
     keyword?: string;
     category?: string;
+    domain?: string;
+    stage?: string;
+    provider?: string;
+    model?: string;
+    mode?: string;
+    inputType?: string;
+    outputType?: string;
+    status?: string;
     tag?: string[];
     page?: number;
     pageSize?: number;
@@ -104,12 +112,18 @@ export type AdminAsset = {
     id: string;
     title: string;
     type: "text" | "image" | "video";
+    mediaType: "text" | "image" | "video" | string;
+    scope: "local" | "library" | string;
+    categoryPath: string;
+    purpose: string;
+    source: string;
     coverUrl: string;
     tags: string[];
     category: string;
     description: string;
     content: string;
     url: string;
+    metadata?: Record<string, unknown>;
     createdAt: string;
     updatedAt: string;
 };
@@ -117,6 +131,13 @@ export type AdminAsset = {
 export type AdminAssetListResponse = {
     items: AdminAsset[];
     tags: string[];
+    freeTags: string[];
+    facets: {
+        mediaTypes: string[];
+        categoryPaths: string[];
+        purposes: string[];
+        sources: string[];
+    };
     total: number;
 };
 
@@ -139,6 +160,11 @@ export async function deleteAdminPrompts(token: string, ids: string[]) {
 export type AdminAssetQuery = {
     keyword?: string;
     type?: string;
+    mediaType?: string;
+    scope?: string;
+    categoryPath?: string;
+    purpose?: string;
+    source?: string;
     tag?: string[];
     page?: number;
     pageSize?: number;
@@ -175,6 +201,11 @@ export type AdminPublicModelChannelSettings = {
     defaultVideoModel: string;
     defaultTextModel: string;
     systemPrompt: string;
+    promptInjection: {
+        image: string;
+        text: string;
+        video: string;
+    };
     allowCustomChannel: boolean;
 };
 

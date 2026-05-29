@@ -3,7 +3,8 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { Cpu } from "lucide-react";
 
-import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
+import { modelOptionsFor, modelDisplayName, type ModelModality } from "@/lib/model-presets";
 import { cn } from "@/lib/utils";
 import type { AiConfig } from "@/stores/use-config-store";
 
@@ -14,13 +15,24 @@ type ModelPickerProps = {
     className?: string;
     fullWidth?: boolean;
     placeholder?: string;
+    modality?: ModelModality;
     onMissingConfig?: () => void;
 };
 
-export function ModelPicker({ config, value, onChange, className, fullWidth = false, placeholder = "选择模型", onMissingConfig }: ModelPickerProps) {
+export function ModelPicker({ config, value, onChange, className, fullWidth = false, placeholder = "选择模型", modality = "any", onMissingConfig }: ModelPickerProps) {
     const pickerId = useId();
     const [open, setOpen] = useState(false);
-    const options = useMemo(() => Array.from(new Set([...(config.channelMode === "local" ? [value] : []), ...config.models].filter(Boolean))), [config.channelMode, config.models, value]);
+    const options = useMemo(() => {
+        return modelOptionsFor(config, modality, value);
+    }, [config.models, modality, value]);
+    const grouped = useMemo(
+        () => ({
+            flow: options.filter((item) => item.group === "flow"),
+            common: options.filter((item) => item.group === "common"),
+            advanced: options.filter((item) => item.group === "advanced"),
+        }),
+        [options],
+    );
     const current = value || "";
 
     useEffect(() => {
@@ -57,7 +69,7 @@ export function ModelPicker({ config, value, onChange, className, fullWidth = fa
                 title={current || placeholder}
             >
                 <ModelIcon model={current} />
-                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current || placeholder}</span>
+                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current ? modelDisplayName(current) : placeholder}</span>
             </SelectTrigger>
             <SelectContent
                 data-canvas-no-zoom
@@ -70,11 +82,13 @@ export function ModelPicker({ config, value, onChange, className, fullWidth = fa
                 onMouseDown={(event) => event.stopPropagation()}
             >
                 {options.length ? (
-                    options.map((model) => (
-                        <SelectItem key={model} value={model} textValue={model}>
-                            <ModelLabel model={model} />
-                        </SelectItem>
-                    ))
+                    <>
+                        <ModelOptionGroup title="推荐模型" options={grouped.common} />
+                        {grouped.common.length && (grouped.flow.length || grouped.advanced.length) ? <SelectSeparator /> : null}
+                        <ModelOptionGroup title="Google Flow" options={grouped.flow} />
+                        {grouped.flow.length && grouped.advanced.length ? <SelectSeparator /> : null}
+                        <ModelOptionGroup title="高级原始模型名" options={grouped.advanced} />
+                    </>
                 ) : (
                     <SelectItem value="__empty__" disabled>
                         {config.channelMode === "remote" ? "暂无可用模型" : "请先到配置里拉取模型列表"}
@@ -85,11 +99,28 @@ export function ModelPicker({ config, value, onChange, className, fullWidth = fa
     );
 }
 
-function ModelLabel({ model }: { model: string }) {
+function ModelOptionGroup({ title, options }: { title: string; options: ReturnType<typeof modelOptionsFor> }) {
+    if (!options.length) return null;
+    return (
+        <SelectGroup>
+            <SelectLabel>{title}</SelectLabel>
+            {options.map((option) => (
+                <SelectItem key={option.value} value={option.value} textValue={`${option.label} ${option.value}`}>
+                    <ModelLabel model={option.value} label={option.label} description={option.description} />
+                </SelectItem>
+            ))}
+        </SelectGroup>
+    );
+}
+
+function ModelLabel({ model, label = modelDisplayName(model), description }: { model: string; label?: string; description?: string }) {
     return (
         <span className="flex min-w-0 items-center gap-2">
             <ModelIcon model={model} />
-            <span className="truncate">{model}</span>
+            <span className="grid min-w-0">
+                <span className="truncate">{label}</span>
+                {description ? <span className="truncate text-[11px] text-muted-foreground">{description}</span> : null}
+            </span>
         </span>
     );
 }

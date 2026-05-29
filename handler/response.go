@@ -42,11 +42,24 @@ func parseQuery(r *http.Request) model.Query {
 	page, _ := strconv.Atoi(q.Get("page"))
 	pageSize, _ := strconv.Atoi(q.Get("pageSize"))
 	return model.Query{
-		Keyword:  q.Get("keyword"),
-		Tags:     q["tag"],
-		Category: q.Get("category"),
-		Type:     q.Get("type"),
-		Page:     page,
-		PageSize: pageSize,
+		Keyword:      q.Get("keyword"),
+		Tags:         q["tag"],
+		Category:     q.Get("category"),
+		Type:         q.Get("type"),
+		MediaType:    q.Get("mediaType"),
+		Scope:        q.Get("scope"),
+		CategoryPath: q.Get("categoryPath"),
+		Purpose:      q.Get("purpose"),
+		Source:       q.Get("source"),
+		Domain:       q.Get("domain"),
+		Stage:        q.Get("stage"),
+		Provider:     q.Get("provider"),
+		Model:        q.Get("model"),
+		Mode:         q.Get("mode"),
+		InputType:    q.Get("inputType"),
+		OutputType:   q.Get("outputType"),
+		Status:       q.Get("status"),
+		Page:         page,
+		PageSize:     pageSize,
 	}
 }

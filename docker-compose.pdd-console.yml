@@ -1,0 +1,33 @@
+services:
+  app:
+    image: pdd-run-console:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pdd-run-console
+    env_file:
+      - .env
+    environment:
+      API_PORT: "127.0.0.1:18080"
+      API_BASE_URL: "http://127.0.0.1:18080"
+      APP_HOSTNAME: "127.0.0.1"
+      WEB_PORT: "13000"
+      CONSOLE_ASSETS_ROOT: "/app/data/assets"
+      VIDEO_STORAGE_ROOT: "/app/data/video"
+      PDD_WORKFLOW_ROOT: "/opt/pdd-workflow"
+      PDD_RUNS_ROOT: "/opt/pdd-workflow/runs"
+      PDD_MATERIALS_ROOT: "/opt/pdd-workflow/materials"
+      PDD_PROMPTS_ROOT: "/opt/pdd-workflow/prompts"
+      PDD_PYTHON: "/opt/pdd-venv/bin/python"
+      PDD_WORKFLOW_CONFIG: "config/provider/workflow.remote-chatgpt2api.example.json"
+      PDD_WORKFLOW_ENV_FILE: "/opt/pdd-workflow/.pdd-console.env"
+      PDD_ACTION_NSENTER: "true"
+      PDD_CONSOLE_READ_ONLY: "false"
+    network_mode: host
+    pid: host
+    privileged: true
+    volumes:
+      - ./data:/app/data
+      - /opt/pdd-workflow:/opt/pdd-workflow
+      - /opt/pdd-venv:/opt/pdd-venv:ro
+    restart: unless-stopped
