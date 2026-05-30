@@ -22,7 +22,28 @@
 
 用途：在真实浏览器里使用已有 `opsc serve --origin <web-url>` 与 Next dev server，验证 browser bootstrap session、本地模板/run 状态页和 artifact 预览。
 
-本轮未执行真实浏览器 smoke。原因是当前收口优先使用 Go 集成测试覆盖 executor 语义，未在本地同时启动持久 `opsc serve`、Next dev server 和真实浏览器会话。
+本轮已用临时 workspace 执行通过：
+
+```bash
+python tools/local_workspace_browser_smoke.py \
+  --web-url http://127.0.0.1:3000 \
+  --serve-url http://127.0.0.1:17680 \
+  --launch-secret <launch.secret>
+```
+
+结果：
+
+```json
+{"ok": true, "runId": "run_01KSWMHAKRHETP87ME7GSAW9NQ", "templateId": "tpl_01KSWMHA9E78AKX86H2TSPR0X2"}
+```
+
+验证内容：
+
+- browser session 使用一次性 `launch.secret` bootstrap。
+- 浏览器上下文中通过 `opsc serve` 创建本地模板与本地 run。
+- 打开真实 `/workflows/ecommerce/<run_id>` 状态页，先观察 pending，再写入 success。
+- 写入 canonical image artifact 与 run artifact ref 后，在状态页点击“预览”并等待 modal 图片出现。
+- smoke 期间 Next dev server 因本机未启动旧 Go API `127.0.0.1:8080` 对 `/api/settings` 返回 502；该错误不影响 local workspace browser smoke 的通过结论。
 
 后续手工命令示例：
 
@@ -35,4 +56,4 @@ python tools/local_workspace_browser_smoke.py \
 
 ## 结论
 
-Phase 10 executor core 可通过自动化收口；真实浏览器 session、真实 local workspace、真实模型账号和真实项目 adapter 仍保留为后续人工回归项。
+Phase 10 executor core 和最小 Web UI local workspace smoke 已通过；真实模型账号、真实长期个人 workspace、专用文章/视频/电商 project adapter 和完整浏览器回归仍保留为后续人工回归项。

@@ -133,7 +133,7 @@ Phase 10 Local Workflow Executor 收口已完成：唯一正式入口仍是 `ops
 - passed：Phase 10 已用 Docker `golang:1.25-alpine` 执行 `gofmt -w internal/localworkspace/executor.go internal/localworkspace/executor_test.go`。
 - passed：Phase 10 已运行 Docker `go test ./internal/localworkspace ./cmd/opsc`，覆盖 project-aware executor 的 condition/script/retry/output mapping、capability/path guard、root/secret 脱敏和既有 serve/MCP/executor 回归。
 - passed：Phase 10 已运行 `python -m py_compile tools/local_workspace_browser_smoke.py`、`cd web && npx tsc --noEmit` 和 `git diff --check`。
-- not run：Phase 10 未启动真实浏览器 smoke；脚本和剩余手工项已记录到 `docs/manual-test-report-phase10.md` 与 `docs/pending-test.md`。
+- passed browser smoke：Phase 10 已启动临时 workspace、`opsc serve` 和 Next dev server，运行 `python tools/local_workspace_browser_smoke.py --web-url http://127.0.0.1:3000 --serve-url http://127.0.0.1:17680 --launch-secret <launch.secret>` 通过；结果为 `run_01KSWMHAKRHETP87ME7GSAW9NQ` / `tpl_01KSWMHA9E78AKX86H2TSPR0X2`，覆盖 browser session bootstrap、本地模板/run 创建、状态页 pending -> success 和 artifact modal 预览。Next dev server 因本机旧 Go API 未启动而记录 `/api/settings` 502，不影响 local workspace smoke 结论。
 - passed：Phase 0 文档变更已运行 `git diff --check`，diff 范围只包含 Markdown/Mermaid 文档。
 - passed：中央 Wiki 已运行 `lint_wiki.sh`、`reindex_qmd.sh llm-wiki` 和 `qmd embed`。
 - passed：Phase 1 已用 Docker `golang:1.25-alpine` 执行 `gofmt -w internal/localworkspace cmd/opsc`。
