@@ -6,26 +6,50 @@ import { useState } from "react";
 import { ModelPicker } from "@/components/model-picker";
 import { fetchImageModels } from "@/services/api/image";
 import { useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { useLocalWorkspaceStore } from "@/stores/use-local-workspace-store";
 
 export function AppConfigModal() {
     const { message } = App.useApp();
     const [loadingModels, setLoadingModels] = useState(false);
+    const [savingProfile, setSavingProfile] = useState(false);
     const config = useConfigStore((state) => state.config);
     const updateConfig = useConfigStore((state) => state.updateConfig);
+    const saveLocalProfile = useConfigStore((state) => state.saveLocalProfile);
+    const isLocalProfileSaving = useConfigStore((state) => state.isLocalProfileSaving);
     const isConfigOpen = useConfigStore((state) => state.isConfigOpen);
     const shouldPromptContinue = useConfigStore((state) => state.shouldPromptContinue);
     const setConfigDialogOpen = useConfigStore((state) => state.setConfigDialogOpen);
     const clearPromptContinue = useConfigStore((state) => state.clearPromptContinue);
     const publicSettings = useConfigStore((state) => state.publicSettings);
+    const localWorkspaceBaseUrl = useLocalWorkspaceStore((state) => state.baseUrl);
+    const localWorkspaceStatus = useLocalWorkspaceStore((state) => state.status);
     const effectiveConfig = useEffectiveConfig();
     const modelChannel = publicSettings?.modelChannel;
     const allowCustomChannel = modelChannel?.allowCustomChannel === true;
     const effectiveMode = allowCustomChannel ? config.channelMode : "remote";
     const modelConfig = effectiveMode === "remote" ? effectiveConfig : config;
 
-    const finishConfig = () => {
+    const finishConfig = async () => {
+        if (effectiveMode === "local") {
+            if (localWorkspaceStatus !== "connected") {
+                message.error("请先连接本地工作区");
+                return;
+            }
+            if (!config.baseUrl.trim() || !config.secretRefName.trim()) {
+                message.error("请填写 Base URL 和 SecretRef 环境变量");
+                return;
+            }
+            setSavingProfile(true);
+            try {
+                await saveLocalProfile(localWorkspaceBaseUrl);
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : "保存本地 profile 失败");
+                return;
+            } finally {
+                setSavingProfile(false);
+            }
+        }
         setConfigDialogOpen(false);
-        if (effectiveMode === "local" && (!config.baseUrl.trim() || !config.apiKey.trim())) return;
         if (!modelConfig.imageModel.trim() || !modelConfig.videoModel.trim() || !modelConfig.textModel.trim()) return;
         if (!allowCustomChannel && config.channelMode !== "remote") updateConfig("channelMode", "remote");
         message.success(shouldPromptContinue ? "配置已保存，请继续刚才的请求" : "配置已保存");
@@ -34,12 +58,17 @@ export function AppConfigModal() {
 
     const refreshModels = async () => {
         if (effectiveMode === "remote") return;
-        if (!config.baseUrl.trim() || !config.apiKey.trim()) {
-            message.error("请先填写 Base URL 和 API Key");
+        if (localWorkspaceStatus !== "connected") {
+            message.error("请先连接本地工作区");
+            return;
+        }
+        if (!config.baseUrl.trim() || !config.secretRefName.trim()) {
+            message.error("请先填写 Base URL 和 SecretRef 环境变量");
             return;
         }
         setLoadingModels(true);
         try {
+            await saveLocalProfile(localWorkspaceBaseUrl);
             const models = await fetchImageModels(config);
             updateConfig("models", models);
             if (models.length && !models.includes(config.imageModel)) updateConfig("imageModel", models[0]);
@@ -66,7 +95,7 @@ export function AppConfigModal() {
             centered
             onCancel={() => setConfigDialogOpen(false)}
             footer={
-                <Button type="primary" onClick={finishConfig}>
+                <Button type="primary" loading={savingProfile || isLocalProfileSaving} onClick={() => void finishConfig()}>
                     完成
                 </Button>
             }
@@ -93,8 +122,8 @@ export function AppConfigModal() {
                                 <Form.Item label="Base URL" className="mb-4">
                                     <Input value={config.baseUrl} onChange={(event) => updateConfig("baseUrl", event.target.value)} />
                                 </Form.Item>
-                                <Form.Item label="API Key" className="mb-4">
-                                    <Input.Password value={config.apiKey} onChange={(event) => updateConfig("apiKey", event.target.value)} />
+                                <Form.Item label="SecretRef 环境变量" className="mb-4" extra="opsc serve 进程读取该环境变量，不在浏览器保存 API Key">
+                                    <Input value={config.secretRefName} placeholder="OPENAI_API_KEY" onChange={(event) => updateConfig("secretRefName", event.target.value)} />
                                 </Form.Item>
                             </div>
                             <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-stone-200 px-3 py-2 dark:border-stone-800">

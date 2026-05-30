@@ -4,14 +4,16 @@ import { BookOpen, CheckSquare, ClipboardCopy, History, LoaderCircle, Plus, Spar
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { App, Button, Checkbox, Drawer, Empty, Input, Modal, Tag, Typography } from "antd";
-import localforage from "localforage";
 import { nanoid } from "nanoid";
 
 import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
+import { LocalWorkspaceStatusAlert } from "@/components/local-workspace/local-workspace-status-alert";
 import { formatDuration } from "@/lib/image-utils";
 import { requestImageQuestion, type ChatCompletionMessage } from "@/services/api/image";
 import { useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { useLocalWorkspaceStore } from "@/stores/use-local-workspace-store";
+import { deleteWorkbenchLogs, listWorkbenchLogs, saveWorkbenchLog } from "./workbench-log-storage";
 
 type TextGenerationLog = {
     id: string;
@@ -27,14 +29,14 @@ type TextGenerationLog = {
     status: "成功" | "失败";
 };
 
-const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "text_generation_logs" });
-
 export function TextWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
     const { message } = App.useApp();
     const effectiveConfig = useEffectiveConfig();
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
+    const workspaceStatus = useLocalWorkspaceStore((state) => state.status);
+    const workspaceId = useLocalWorkspaceStore((state) => state.workspace?.id || "");
     const [prompt, setPrompt] = useState("");
     const [result, setResult] = useState("");
     const [logs, setLogs] = useState<TextGenerationLog[]>([]);
@@ -51,7 +53,7 @@ export function TextWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
 
     useEffect(() => {
         void refreshLogs();
-    }, []);
+    }, [workspaceStatus, workspaceId]);
 
     useEffect(() => {
         if (!running || !startedAt) return;
@@ -106,7 +108,9 @@ export function TextWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
     };
 
     const deleteSelectedLogs = () => {
-        void Promise.all(selectedLogIds.map((id) => logStore.removeItem(id))).then(refreshLogs);
+        void deleteWorkbenchLogs(selectedLogIds)
+            .then(refreshLogs)
+            .catch((error) => message.error(error instanceof Error ? error.message : "删除本地生成记录失败"));
         if (previewLog && selectedLogIds.includes(previewLog.id)) {
             setPreviewLog(null);
             setResult("");
@@ -124,7 +128,20 @@ export function TextWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
     };
 
     const saveLog = (log: TextGenerationLog) => {
-        void logStore.setItem(log.id, log).then(refreshLogs);
+        void saveWorkbenchLog(
+            "text",
+            {
+                title: log.title,
+                createdAtMillis: log.createdAt,
+                status: log.status === "失败" ? "error" : "success",
+                model: log.model,
+                prompt: log.prompt,
+                metrics: { durationMs: log.durationMs },
+            },
+            log,
+        )
+            .then(refreshLogs)
+            .catch((error) => message.error(error instanceof Error ? error.message : "保存本地生成记录失败"));
     };
 
     const refreshLogs = async () => setLogs(await readStoredLogs());
@@ -143,6 +160,10 @@ export function TextWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
                             <Button className="lg:hidden" icon={<History className="size-4" />} onClick={() => setLogsOpen(true)}>
                                 记录
                             </Button>
+                        </div>
+
+                        <div className="mt-4">
+                            <LocalWorkspaceStatusAlert message="生成记录会保存到本地工作区" />
                         </div>
 
                         <div className="mt-6 space-y-5">
@@ -263,10 +284,18 @@ function LogPanel({
 async function readStoredLogs() {
     if (typeof window === "undefined") return [];
     try {
-        const logs: TextGenerationLog[] = [];
-        await logStore.iterate<TextGenerationLog, void>((value) => {
-            logs.push(normalizeLog(value));
-        });
+        const logs = (await listWorkbenchLogs<Partial<TextGenerationLog>>("text")).map((document) =>
+            normalizeLog({
+                ...document.payload,
+                id: document.id,
+                createdAt: document.data.createdAtMillis || Date.parse(document.createdAt),
+                title: document.data.title || document.payload.title,
+                prompt: document.data.prompt || document.payload.prompt,
+                model: document.data.model || document.payload.model,
+                status: document.data.status === "error" ? "失败" : document.payload.status,
+                durationMs: Number(document.data.metrics?.durationMs || document.payload.durationMs || 0),
+            }),
+        );
         return logs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     } catch {
         return [];

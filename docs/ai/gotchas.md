@@ -6,12 +6,34 @@
 
 ## 浏览器本地数据不是云同步
 
-画布项目、“我的素材”、“我的提示词”和用户本地 AI 配置主要保存在浏览器 localforage/IndexedDB。登录账号后不表示这些本地业务数据自动同步到服务器。
+用户本地 AI 配置不应保存在浏览器 localforage/IndexedDB 或 `localStorage`。登录账号后不表示这些本地业务数据自动同步到服务器。当前画布项目、“我的素材”、“我的提示词”、工作台 text/image/video 生成记录、AI 本地 profile、本地项目引用、电商工作流私有模板、本地 run/artifact 基础记录和工作流入口自定义文件夹已先接 `opsc serve`，浏览器里只保留 `opsc:*_cache:v1` 展示缓存、loopback `baseUrl` 或生成中/上传中的临时媒体状态；旧 `infinite-canvas:*`、`text_generation_logs`、`image_generation_logs`、`video_generation_logs`、`ops-canvas-workflow-folders` 测试数据不会自动迁移，并会在 Web UI 启动时从 localforage `app_state` 和 `localStorage` 清理已知 legacy private keys。不要把这个清理扩展到 `image_files/media_files`，它们仍承担上传中、生成中或保存失败重试前的临时媒体桥接。
+
+`opsc:local_workspace_connection` 是连接提示缓存，不是 workspace fact。浏览器最多保存 loopback `baseUrl`；旧版本如果写入过 `workspace/runtime/tokenFile/launchSecretFile`，必须通过 store version migration 丢弃，不能把这些字段当成可复用的 session 或路径信息。
+
+AI local profile 是 workspace-scoped 会话视图，不是全局浏览器配置。切换到没有 profile 的 workspace、刷新失败或断开 local workspace 时必须清空内存中的 Base URL、模型列表、默认模型和 `SecretRef`，否则会把上一个 workspace 的私有配置串到新 workspace。
+
+## Local Workspace 只部分接入 Web UI
+
+`docs/local-workspace-v1-contract.md` 是 Phase 0 已接受并补全的设计 contract。Phase 7 已实现 `internal/localworkspace` foundation、`cmd/opsc workspace init/info/doctor/index rebuild/export plan/gc plan`、template/run/artifact/profile/project/asset/prompt/canvas-project/workbench-log repository、`opsc serve` 本机 loopback API、`opsc mcp` stdio 查询/诊断薄封装和 serve-backed index rebuild 工具、profiles/projects/assets/prompts/canvas-projects、local templates、local run/artifact write 和 workspace preferences create/update/delete 类接口、workbench-log create/delete、asset/canvas-project/workbench multipart import，以及 Web UI `我的素材` / `我的提示词` / 画布项目库 / 画布项目媒体 / 工作台生成记录 / AI profile-proxy / 本地项目引用 / 电商工作流私有模板 / 模板固定素材本地选择 / 工作流入口自定义文件夹 / 本地 run/artifact 基础 UI adapter。当前本地模板启动 run 时只会 materialize 固定 `material_lookup` 本地图片素材为 canonical artifact ref，其它节点仍是 pending 草稿，真实 PDD/VPS executor、服务端 DB 和 PDD/VPS 文件目录仍不是 local workspace canonical data；自动 `material_lookup` 本地素材匹配也还没接执行器。不要把局部接入误读成全站 Web UI 本地化、MCP canonical object 写入/执行工具或旧数据迁移已经完成。
+
+本地项目引用的 Web UI 是轻量管理入口，不是完整 project adapter。列表不得展示本机 `rootPath`，只有用户点击编辑时才通过 `showPaths=1` 读取路径；如果项目包含 `credentialRef`，Web UI 只拿到脱敏 summary，不能保存覆盖真实 secretRef，应该提示用户用 CLI 修改。
+
+`workspace doctor` 当前只做结构、引用和占位符级检查：能发现 schema/目录/manifest/lock/index 文件、broken refs、`secretRef` 明文字段、project root 可访问性/fingerprint、project execution policy、asset file、prompt content、canvas-project media file、workbench-log media file、export rule 和 GC dry-run candidates，但不会解析真实 secret、不会访问模型供应商，也不会证明 index 内容一定新鲜。若怀疑 `index.sqlite` 与 canonical JSON/JSONL 漂移，先运行 `opsc workspace index rebuild --json`。
+
+`workspace gc plan` 是 dry-run，只返回相对路径 candidates，动作固定为 `review`，不会删除 artifact、asset file、prompt content、canvas-project media file、workbench-log media file 或 run refs。后续如果实现删除命令，必须先确认引用检查和回滚/备份策略。
+
+## `opsc serve` Token 不是 `LOCAL_AGENT_TOKEN`
+
+当前 `cmd/local-agent` 使用 `LOCAL_AGENT_TOKEN` 连接 VPS 控制台领取脚本任务。`opsc serve` 的 `bearer.token` 存在 workspace 外 XDG state 目录，只用于显式 HTTP client 访问 local workspace；browser 只能用一次性 `launch.secret` 换 HttpOnly session，带 `Origin` 的请求不接受 bearer。`opsc mcp` 的查询/诊断/dry-run 工具仍包装同进程 CLI JSON 命令；唯一例外是 `opsc_workspace_index_rebuild`，它只在 active loopback `opsc serve` 存在时读取 runtime state 中的相对 `bearer.token` 并调用 `/api/local/workspace/index/rebuild`，不把 token、token 文件路径或 serve URL 输出给 MCP client。两者不能混用，也不要把任一 token、launch secret 或 session id 写进 exports、日志、普通 JSON 或默认 CLI 输出。`GET /health` / `GET /api/health` 是唯一免鉴权健康检查端点，只能返回 `ok`。
+
+浏览器 session cookie 是 `SameSite=Lax`，开发时不要混用 `localhost` 和 `127.0.0.1`。如果 Web UI 是 `http://localhost:3000`，本地工作区服务地址也优先填 `http://localhost:17680`；如果 Web UI 是 `http://127.0.0.1:3000`，再使用 `http://127.0.0.1:17680`。否则 session bootstrap 可能成功但后续 fetch 不带 cookie。
 
 ## AI Key 可能在两处
 
-- 本地直连模式：用户 API Key 保存在浏览器本地配置中，并由前端直接请求 OpenAI-compatible 接口。
+- 本地直连模式：当前应通过 `opsc serve` local profile 的 `secretRef` 解析用户 API Key，浏览器不应长期保存 API Key，也不应直接请求 OpenAI-compatible 接口。
 - 远程渠道模式：管理员渠道密钥保存在后端 `settings.private.channels`，前端不应读取真实密钥。
+
+Local profile 的完整 JSON 使用 `secretRef.name` 保存 env var 名；`opsc serve` summary 会脱敏成 `secretRef.reference`。Web UI 读取 profile 时需要兼容这两个字段，但两者都不是 secret 值，不能把它们当 API Key 展示、日志记录或发送给模型供应商。
 
 文档和 UI 说明需要区分这两种模式。
 

@@ -46,6 +46,9 @@ import { defaultConfig, useConfigStore, useEffectiveConfig, type AiConfig } from
 import { useThemeStore } from "@/stores/use-theme-store";
 import { fetchAdminAssets } from "@/services/api/admin";
 import { fetchPDDWorkflowTemplate, fetchPDDWorkflowThemes, savePDDWorkflowTemplate, startPDDWorkflowTemplateRun, type WorkflowNodeRetry, type WorkflowTemplate, type WorkflowTemplateEdge, type WorkflowTemplateNode, type WorkflowTemplateSpec } from "@/services/api/pdd";
+import { fetchLocalPDDWorkflowTemplate, isLocalWorkflowTemplateId, saveLocalPDDWorkflowTemplate, startLocalPDDWorkflowTemplateRun } from "@/services/local-workflow-templates";
+import { useAssetStore } from "@/stores/use-asset-store";
+import { useLocalWorkspaceStore } from "@/stores/use-local-workspace-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 type DragState = {
@@ -184,6 +187,10 @@ export default function PDDWorkflowTemplateEditor({ templateId }: { templateId: 
     const { message } = App.useApp();
     const router = useRouter();
     const token = useUserStore((state) => state.token);
+    const localWorkspaceStatus = useLocalWorkspaceStore((state) => state.status);
+    const localWorkspace = useLocalWorkspaceStore((state) => state.workspace);
+    const localWorkspaceBaseUrl = useLocalWorkspaceStore((state) => state.baseUrl);
+    const useLocalTemplates = localWorkspaceStatus === "connected" && Boolean(localWorkspace);
     const colorTheme = useThemeStore((state) => state.theme);
     const theme = canvasThemes[colorTheme];
     const normalizedTemplateId = templateId || "";
@@ -232,9 +239,9 @@ export default function PDDWorkflowTemplateEditor({ templateId }: { templateId: 
     const viewModeInitializedRef = useRef(false);
 
     const query = useQuery({
-        queryKey: ["pdd-workflow-template", normalizedTemplateId, token],
-        queryFn: () => fetchPDDWorkflowTemplate(normalizedTemplateId, token || ""),
-        enabled: Boolean(token && normalizedTemplateId && !isNew),
+        queryKey: ["pdd-workflow-template", useLocalTemplates ? "local" : "server", normalizedTemplateId, useLocalTemplates ? localWorkspaceBaseUrl : token],
+        queryFn: () => (useLocalTemplates ? fetchLocalPDDWorkflowTemplate(localWorkspaceBaseUrl, normalizedTemplateId) : fetchPDDWorkflowTemplate(normalizedTemplateId, token || "")),
+        enabled: Boolean((useLocalTemplates || token) && normalizedTemplateId && !isNew),
     });
 
     useEffect(() => {
@@ -309,7 +316,7 @@ export default function PDDWorkflowTemplateEditor({ templateId }: { templateId: 
     const saveMutation = useMutation({
         mutationFn: () => {
             if (!template) throw new Error("模板为空");
-            return savePDDWorkflowTemplate(template, token || "");
+            return useLocalTemplates ? saveLocalPDDWorkflowTemplate(localWorkspaceBaseUrl, template) : savePDDWorkflowTemplate(template, token || "");
         },
         onSuccess: (saved) => {
             loadTemplate(saved);
@@ -322,18 +329,20 @@ export default function PDDWorkflowTemplateEditor({ templateId }: { templateId: 
     const startMutation = useMutation({
         mutationFn: () => {
             if (!template) throw new Error("模板为空");
-            return startPDDWorkflowTemplateRun(
-                template.id,
-                {
-                    inputs: parseInputs(inputsText),
-                    productConcurrency: template.spec.settings.productConcurrency,
-                    maxRetries: template.spec.settings.maxRetries,
-                },
-                token || "",
-            );
+            const payload = {
+                inputs: parseInputs(inputsText),
+                productConcurrency: template.spec.settings.productConcurrency,
+                maxRetries: template.spec.settings.maxRetries,
+            };
+            if (useLocalTemplates || isLocalWorkflowTemplateId(template.id)) {
+                if (!useLocalTemplates) throw new Error("请先连接本地工作区");
+                return startLocalPDDWorkflowTemplateRun(localWorkspaceBaseUrl, template.id, payload);
+            }
+            if (!token) throw new Error("启动 PDD/VPS run 需要管理员登录");
+            return startPDDWorkflowTemplateRun(template.id, payload, token || "");
         },
         onSuccess: (result) => {
-            message.success(`已启动 ${result.runId}`);
+            message.success(result.runId.startsWith("run_") ? `已创建本地 run ${result.runId}` : `已启动 ${result.runId}`);
             setStartOpen(false);
             router.push(`/workflows/ecommerce/${encodeURIComponent(result.runId)}`);
         },
@@ -953,11 +962,12 @@ export default function PDDWorkflowTemplateEditor({ templateId }: { templateId: 
         return () => window.removeEventListener("keydown", handleKeyDown);
     });
 
-    if (!token) {
+    if (!useLocalTemplates && !token) {
         return (
             <main className="flex h-full items-center justify-center bg-background px-6 text-foreground">
                 <Card className="w-full max-w-md">
                     <Typography.Title level={3}>需要登录</Typography.Title>
+                    <Typography.Paragraph type="secondary">连接本地工作区后可编辑私有模板；未连接时需要管理员登录访问服务器模板。</Typography.Paragraph>
                     <Button type="primary" href="/login">
                         去登录
                     </Button>
@@ -1003,6 +1013,7 @@ export default function PDDWorkflowTemplateEditor({ templateId }: { templateId: 
                     onAdvancedModeChange={setAdvancedMode}
                     onAutoArrange={autoArrangeFlowLayout}
                     onSave={() => saveMutation.mutate()}
+                    runDisabled={isNew || saveMutation.isPending || (!useLocalTemplates && isLocalWorkflowTemplateId(template.id))}
                     onRun={() => setStartOpen(true)}
                 />
                 <div className="relative min-h-0 flex-1">
@@ -1128,11 +1139,12 @@ export default function PDDWorkflowTemplateEditor({ templateId }: { templateId: 
                         nodes={spec.nodes}
                         edges={spec.edges}
                         advancedMode={advancedMode}
-	                        onChange={(patch) => updateNode(selectedNode.id, patch)}
-	                        onAddEdge={(from) => addEdge(from, selectedNode.id)}
-	                        onUpdateEdge={(id, patch) => updateEdge(id, patch)}
-	                        onDeleteEdge={(id) => deleteEdges(new Set([id]))}
-	                        onDelete={() => deleteNodes(new Set([selectedNode.id]))}
+                        useLocalAssets={useLocalTemplates}
+                        onChange={(patch) => updateNode(selectedNode.id, patch)}
+                        onAddEdge={(from) => addEdge(from, selectedNode.id)}
+                        onUpdateEdge={(id, patch) => updateEdge(id, patch)}
+                        onDeleteEdge={(id) => deleteEdges(new Set([id]))}
+                        onDelete={() => deleteNodes(new Set([selectedNode.id]))}
                     />
                 </aside>
             ) : selectedNodeIds.size > 1 ? (
@@ -1188,6 +1200,7 @@ function TemplateTopBar({
     onAdvancedModeChange,
     onAutoArrange,
     onSave,
+    runDisabled,
     onRun,
 }: {
     template: WorkflowTemplate;
@@ -1203,6 +1216,7 @@ function TemplateTopBar({
     onAdvancedModeChange: (value: boolean) => void;
     onAutoArrange: () => void;
     onSave: () => void;
+    runDisabled: boolean;
     onRun: () => void;
 }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
@@ -1232,7 +1246,7 @@ function TemplateTopBar({
                 <Button icon={<Save className="size-4" />} loading={saving} onClick={onSave}>
                     保存
                 </Button>
-                <Button type="primary" icon={<Play className="size-4" />} disabled={isNew || saving} onClick={onRun}>
+                <Button type="primary" icon={<Play className="size-4" />} disabled={runDisabled} onClick={onRun}>
                     运行模板
                 </Button>
             </Space>
@@ -1728,24 +1742,32 @@ function NodeEditor({
     nodes,
     edges,
     advancedMode,
-	    onChange,
-	    onAddEdge,
-	    onUpdateEdge,
-	    onDeleteEdge,
-	    onDelete,
+    useLocalAssets,
+    onChange,
+    onAddEdge,
+    onUpdateEdge,
+    onDeleteEdge,
+    onDelete,
 }: {
     node: WorkflowTemplateNode;
     nodes: WorkflowTemplateNode[];
     edges: WorkflowTemplateEdge[];
     advancedMode: boolean;
-	    onChange: (patch: Partial<WorkflowTemplateNode>) => void;
-	    onAddEdge: (from: string) => void;
-	    onUpdateEdge: (id: string, patch: Partial<WorkflowTemplateEdge>) => void;
-	    onDeleteEdge: (id: string) => void;
-	    onDelete: () => void;
+    useLocalAssets: boolean;
+    onChange: (patch: Partial<WorkflowTemplateNode>) => void;
+    onAddEdge: (from: string) => void;
+    onUpdateEdge: (id: string, patch: Partial<WorkflowTemplateEdge>) => void;
+    onDeleteEdge: (id: string) => void;
+    onDelete: () => void;
 }) {
     const upstreamEdges = edges.filter((edge) => edge.to === node.id);
     const token = useUserStore((state) => state.token);
+    const localWorkspaceId = useLocalWorkspaceStore((state) => state.workspace?.id || "");
+    const localAssets = useAssetStore((state) => state.assets);
+    const localAssetsLoaded = useAssetStore((state) => state.workspaceLoaded);
+    const localAssetsLoadedWorkspaceId = useAssetStore((state) => state.loadedWorkspaceId);
+    const localAssetsLoading = useAssetStore((state) => state.loading);
+    const loadLocalAssets = useAssetStore((state) => state.loadFromWorkspace);
     const effectiveConfig = useEffectiveConfig();
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const nodeConfig = buildTemplateNodeConfig(effectiveConfig, node);
@@ -1769,8 +1791,18 @@ function NodeEditor({
     const assetQuery = useQuery({
         queryKey: ["workflow-template-image-assets", token],
         queryFn: () => fetchAdminAssets(token || "", { type: "image", pageSize: 200 }),
-        enabled: Boolean(token && isMaterialLookup),
+        enabled: Boolean(!useLocalAssets && token && isMaterialLookup),
     });
+    useEffect(() => {
+        if (!useLocalAssets || !isMaterialLookup || !localWorkspaceId) return;
+        if (localAssetsLoaded && localAssetsLoadedWorkspaceId === localWorkspaceId) return;
+        void loadLocalAssets();
+    }, [isMaterialLookup, loadLocalAssets, localAssetsLoaded, localAssetsLoadedWorkspaceId, localWorkspaceId, useLocalAssets]);
+    const materialAssetOptions = useMemo(() => {
+        if (useLocalAssets) return localAssets.filter((asset) => asset.kind === "image").map((asset) => ({ label: asset.title, value: asset.id }));
+        return (assetQuery.data?.items || []).map((item) => ({ label: item.title, value: item.id }));
+    }, [assetQuery.data?.items, localAssets, useLocalAssets]);
+    const materialAssetsLoading = useLocalAssets ? localAssetsLoading || (Boolean(localWorkspaceId) && (!localAssetsLoaded || localAssetsLoadedWorkspaceId !== localWorkspaceId)) : assetQuery.isLoading;
     const updateImageSetting = (key: keyof AiConfig, value: string) => {
         if (key === "count") onChange({ count: Number(value) || 1 });
         else if (key === "size") onChange({ size: value });
@@ -1828,10 +1860,10 @@ function NodeEditor({
                                     showSearch
                                     className="w-full"
                                     placeholder="选择固定素材"
-                                    loading={assetQuery.isLoading}
+                                    loading={materialAssetsLoading}
                                     value={fixedAssetId || undefined}
                                     optionFilterProp="label"
-                                    options={(assetQuery.data?.items || []).map((item) => ({ label: item.title, value: item.id }))}
+                                    options={materialAssetOptions}
                                     onChange={(assetId) => onChange({ extra: { ...(node.extra || {}), assetId } })}
                                 />
                             ) : null}

@@ -17,3 +17,5 @@
 前端请求逻辑以 `code` 判断业务是否成功。当前后端业务失败也会返回 HTTP 200，前端不要只依赖 HTTP 状态码判断结果。
 
 接口连接失败、服务不可达、返回体不是约定 JSON 时，前端按网络或接口异常处理。
+
+例外：`opsc serve` 的 `/health` 和 `/api/health` 是免鉴权可用性探针，返回 `text/plain` 的 `ok`，不得泄露 workspace 路径、token、profile 或对象数据。除 health 外，`/api/local/*` 仍按 `{ code, data, msg }` JSON envelope 处理。

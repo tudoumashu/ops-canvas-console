@@ -1,6 +1,7 @@
 import axios from "axios";
 
-import { buildApiUrl, type AiConfig } from "@/stores/use-config-store";
+import { currentLocalWorkspaceConnection } from "@/stores/use-local-workspace-store";
+import type { AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
@@ -147,7 +148,10 @@ function withSystemPrompt(config: AiConfig, prompt: string) {
 }
 
 function aiApiUrl(config: AiConfig, path: string) {
-    return config.channelMode === "remote" ? `/api/v1${path}` : buildApiUrl(config.baseUrl, path);
+    if (config.channelMode === "remote") return `/api/v1${path}`;
+    const connection = currentLocalWorkspaceConnection();
+    if (!connection) throw new Error("请先连接本地工作区");
+    return `${connection.baseUrl}/api/local/ai/v1${path}`;
 }
 
 function aiHeaders(config: AiConfig, contentType?: string) {
@@ -158,9 +162,15 @@ function aiHeaders(config: AiConfig, contentType?: string) {
               ...(contentType ? { "Content-Type": contentType } : {}),
           }
         : {
-              Authorization: `Bearer ${config.apiKey}`,
               ...(contentType ? { "Content-Type": contentType } : {}),
           };
+}
+
+function aiRequestOptions(config: AiConfig, contentType?: string) {
+    return {
+        headers: aiHeaders(config, contentType),
+        withCredentials: config.channelMode === "local",
+    };
 }
 
 function refreshRemoteUser(config: AiConfig) {
@@ -190,7 +200,7 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
                 response_format: "b64_json",
             },
             {
-                headers: aiHeaders(config, "application/json"),
+                ...aiRequestOptions(config, "application/json"),
             },
         );
         const images = parseImagePayload(response.data);
@@ -224,7 +234,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     files.forEach((file) => formData.append("image", file));
 
     try {
-        const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/edits"), formData, { headers: aiHeaders(config) });
+        const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/edits"), formData, aiRequestOptions(config));
         const images = parseImagePayload(response.data);
         refreshRemoteUser(config);
         return images;
@@ -247,9 +257,7 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
                 stream: true,
             },
             {
-                headers: {
-                    ...aiHeaders(config, "application/json"),
-                } as Record<string, string>,
+                ...aiRequestOptions(config, "application/json"),
                 responseType: "text",
                 onDownloadProgress: (event) => {
                     const responseText = String(event.event?.target?.responseText || "");
@@ -298,11 +306,7 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
 export async function fetchImageModels(config: AiConfig) {
     if (config.channelMode === "remote") return config.models;
     try {
-        const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(buildApiUrl(config.baseUrl, "/models"), {
-            headers: {
-                Authorization: `Bearer ${config.apiKey}`,
-            },
-        });
+        const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(aiApiUrl(config, "/models"), aiRequestOptions(config));
         return (response.data.data || [])
             .map((model) => model.id)
             .filter((id): id is string => Boolean(id))

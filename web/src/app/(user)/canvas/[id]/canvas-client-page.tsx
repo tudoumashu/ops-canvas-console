@@ -16,6 +16,7 @@ import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { useAssetStore } from "@/stores/use-asset-store";
+import { useLocalWorkspaceStore } from "@/stores/use-local-workspace-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { cropDataUrl } from "../utils/canvas-image-data";
 import { fitNodeSize, nodeSizeFromRatio } from "../utils/canvas-node-size";
@@ -223,12 +224,18 @@ function InfiniteCanvasPage() {
     const addAsset = useAssetStore((state) => state.addAsset);
     const cleanupAssetImages = useAssetStore((state) => state.cleanupImages);
     const hydrated = useCanvasStore((state) => state.hydrated);
+    const workspaceLoaded = useCanvasStore((state) => state.workspaceLoaded);
+    const loadedWorkspaceId = useCanvasStore((state) => state.loadedWorkspaceId);
+    const projectsLoading = useCanvasStore((state) => state.loading);
+    const loadProjectsFromWorkspace = useCanvasStore((state) => state.loadFromWorkspace);
     const createProject = useCanvasStore((state) => state.createProject);
     const openProject = useCanvasStore((state) => state.openProject);
     const updateProject = useCanvasStore((state) => state.updateProject);
     const renameProject = useCanvasStore((state) => state.renameProject);
     const deleteProjects = useCanvasStore((state) => state.deleteProjects);
     const currentProject = useCanvasStore((state) => state.projects.find((project) => project.id === projectId));
+    const workspaceStatus = useLocalWorkspaceStore((state) => state.status);
+    const workspaceId = useLocalWorkspaceStore((state) => state.workspace?.id || "");
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const [nodes, setNodes] = useState<CanvasNodeData[]>([]);
     const [connections, setConnections] = useState<CanvasConnection[]>([]);
@@ -300,7 +307,13 @@ function InfiniteCanvasPage() {
     );
 
     useEffect(() => {
-        if (!hydrated) return;
+        if (!hydrated || workspaceStatus !== "connected" || projectsLoading || loadedWorkspaceId === workspaceId) return;
+        void loadProjectsFromWorkspace();
+    }, [hydrated, loadProjectsFromWorkspace, loadedWorkspaceId, projectsLoading, workspaceId, workspaceStatus]);
+
+    useEffect(() => {
+        if (!hydrated || workspaceStatus === "idle" || workspaceStatus === "checking") return;
+        if (workspaceStatus === "connected" && (!workspaceLoaded || loadedWorkspaceId !== workspaceId || projectsLoading)) return;
         setProjectLoaded(false);
         const project = openProject(projectId);
         if (!project) {
@@ -335,7 +348,7 @@ function InfiniteCanvasPage() {
             setProjectLoaded(true);
         };
         void restore();
-    }, [hydrated, openProject, projectId, router]);
+    }, [hydrated, loadedWorkspaceId, openProject, projectId, projectsLoading, router, workspaceId, workspaceLoaded, workspaceStatus]);
 
     useEffect(() => {
         if (!projectLoaded || applyingHistoryRef.current || historyPausedRef.current) return;
@@ -835,13 +848,14 @@ function InfiniteCanvasPage() {
         applyHistory(next);
     }, [applyHistory]);
 
-    const createAndOpenProject = useCallback(() => {
-        const id = createProject(`无限画布 ${useCanvasStore.getState().projects.length + 1}`);
-        router.push(`/canvas/${id}`);
-    }, [createProject, router]);
+    const createAndOpenProject = useCallback(async () => {
+        const id = await createProject(`无限画布 ${useCanvasStore.getState().projects.length + 1}`);
+        if (id) router.push(`/canvas/${id}`);
+        else message.error(useCanvasStore.getState().lastError || "创建画布失败");
+    }, [createProject, message, router]);
 
-    const deleteCurrentProject = useCallback(() => {
-        deleteProjects([projectId]);
+    const deleteCurrentProject = useCallback(async () => {
+        await deleteProjects([projectId]);
         cleanupAssetImages();
         router.push("/canvas");
     }, [cleanupAssetImages, deleteProjects, projectId, router]);
@@ -1333,19 +1347,21 @@ function InfiniteCanvasPage() {
             if (node.type === CanvasNodeType.Text) {
                 const content = node.metadata?.content?.trim();
                 if (!content) return message.error("没有可保存的文本");
-                addAsset({ kind: "text", title: node.metadata?.prompt?.slice(0, 24) || "画布文本", coverUrl: "", tags: [], source: "Canvas", data: { content }, metadata: { source: "canvas", nodeId: node.id } });
+                const id = await addAsset({ kind: "text", title: node.metadata?.prompt?.slice(0, 24) || "画布文本", coverUrl: "", tags: [], source: "Canvas", data: { content }, metadata: { source: "canvas", nodeId: node.id } });
+                if (!id) return message.error(useAssetStore.getState().lastError || "请先连接本地工作区");
                 message.success("已加入我的素材");
                 return;
             }
             if (node.type === CanvasNodeType.Video) {
                 if (!node.metadata?.content) return message.error("没有可保存的视频");
-                addAsset({ kind: "video", title: node.metadata?.prompt?.slice(0, 24) || "画布视频", coverUrl: "", tags: [], source: "Canvas", data: { url: node.metadata.content, storageKey: node.metadata.storageKey, width: node.width, height: node.height, bytes: node.metadata.bytes || 0, mimeType: node.metadata.mimeType || "video/mp4" }, metadata: { source: "canvas", nodeId: node.id, prompt: node.metadata?.prompt } });
+                const id = await addAsset({ kind: "video", title: node.metadata?.prompt?.slice(0, 24) || "画布视频", coverUrl: "", tags: [], source: "Canvas", data: { url: node.metadata.content, storageKey: node.metadata.storageKey, width: node.width, height: node.height, bytes: node.metadata.bytes || 0, mimeType: node.metadata.mimeType || "video/mp4" }, metadata: { source: "canvas", nodeId: node.id, prompt: node.metadata?.prompt } });
+                if (!id) return message.error(useAssetStore.getState().lastError || "请先连接本地工作区");
                 message.success("已加入我的素材");
                 return;
             }
             if (!node.metadata?.content) return message.error("没有可保存的图片");
-            const dataUrl = node.metadata.storageKey ? "" : node.metadata.content;
-            addAsset({
+            const dataUrl = node.metadata.content;
+            const id = await addAsset({
                 kind: "image",
                 title: node.metadata?.prompt?.slice(0, 24) || "画布图片",
                 coverUrl: node.metadata.content,
@@ -1361,6 +1377,7 @@ function InfiniteCanvasPage() {
                 },
                 metadata: { source: "canvas", nodeId: node.id, prompt: node.metadata?.prompt },
             });
+            if (!id) return message.error(useAssetStore.getState().lastError || "请先连接本地工作区");
             message.success("已加入我的素材");
         },
         [addAsset, message],
@@ -1547,7 +1564,7 @@ function InfiniteCanvasPage() {
 
     const finishTitleEditing = useCallback(() => {
         const nextTitle = titleDraft.trim();
-        if (nextTitle) renameProject(projectId, nextTitle);
+        if (nextTitle) void renameProject(projectId, nextTitle);
         setTitleEditing(false);
     }, [projectId, renameProject, titleDraft]);
 
@@ -2496,11 +2513,11 @@ function imageExtension(dataUrl: string) {
 }
 
 function imageMetadata(image: UploadedImage): CanvasNodeMetadata {
-    return { content: image.url, storageKey: image.storageKey, status: "success", naturalWidth: image.width, naturalHeight: image.height, bytes: image.bytes, mimeType: image.mimeType };
+    return { content: image.url, storageKey: image.storageKey, workspaceFileKey: undefined, status: "success", naturalWidth: image.width, naturalHeight: image.height, bytes: image.bytes, mimeType: image.mimeType };
 }
 
 function videoMetadata(video: UploadedFile): CanvasNodeMetadata {
-    return { content: video.url, storageKey: video.storageKey, status: "success", naturalWidth: video.width, naturalHeight: video.height, bytes: video.bytes, mimeType: video.mimeType || "video/mp4" };
+    return { content: video.url, storageKey: video.storageKey, workspaceFileKey: undefined, status: "success", naturalWidth: video.width, naturalHeight: video.height, bytes: video.bytes, mimeType: video.mimeType || "video/mp4" };
 }
 
 function buildImageGenerationMetadata(type: CanvasImageGenerationType, config: AiConfig, count: number, references: ReferenceImage[]): CanvasNodeMetadata {
@@ -2534,6 +2551,7 @@ async function hydrateCanvasImages(nodes: CanvasNodeData[]) {
     return Promise.all(
         nodes.map(async (node) => {
             const content = node.metadata?.content;
+            if (node.metadata?.workspaceFileKey) return node;
             if (node.type === CanvasNodeType.Video && node.metadata?.storageKey) return { ...node, metadata: { ...node.metadata, content: await resolveMediaUrl(node.metadata.storageKey, content) } };
             if (node.type !== CanvasNodeType.Image || !content) return node;
             if (node.metadata?.storageKey) return { ...node, metadata: { ...node.metadata, content: await resolveImageUrl(node.metadata.storageKey, content) } };
@@ -2544,7 +2562,8 @@ async function hydrateCanvasImages(nodes: CanvasNodeData[]) {
 }
 
 async function hydrateAssistantImages(sessions: CanvasAssistantSession[]) {
-    const hydrateItem = async <T extends { dataUrl?: string; storageKey?: string }>(item: T) => {
+    const hydrateItem = async <T extends { dataUrl?: string; storageKey?: string; workspaceFileKey?: string }>(item: T) => {
+        if (item.workspaceFileKey) return item;
         if (item.storageKey) return { ...item, dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl) };
         if (item.dataUrl?.startsWith("data:image/")) {
             const image = await uploadImage(item.dataUrl);
@@ -2637,6 +2656,7 @@ function sourceNodeReferenceImages(node: CanvasNodeData | null) {
             type: node.metadata.mimeType || "image/png",
             dataUrl: node.metadata.content,
             storageKey: node.metadata.storageKey,
+            workspaceFileKey: node.metadata.workspaceFileKey,
         },
     ];
 }

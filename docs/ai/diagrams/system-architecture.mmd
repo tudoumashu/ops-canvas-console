@@ -1,6 +1,7 @@
 flowchart LR
   Browser["Browser UI"] --> NextApp["Next.js App Router"]
-  Browser <--> LocalStore[("localforage / IndexedDB")]
+  Browser <--> LocalStore[("localforage / IndexedDB cache")]
+  Browser -- "session cookie" --> OpscServe["opsc serve"]
   NextApp --> Proxy["/api/[...path] proxy"]
   Proxy --> Gin["Go Gin API"]
 
@@ -20,7 +21,17 @@ flowchart LR
   Services --> GitHubSources["GitHub prompt sources"]
   Services --> AgentQueue["local agent job map"]
   LocalAgent["cmd/local-agent"] --> Gin
+  OpscServe --> LocalWorkspace[("~/OpsCanvas")]
+  LocalWorkspace --> WorkspacePrefs["opsc-workspace.json preferences"]
+  LocalWorkspace --> LocalTemplates["templates/"]
+  LocalWorkspace --> LocalRuns["runs/"]
+  LocalWorkspace --> LocalArtifacts["artifacts/"]
+  LocalWorkspace --> LocalAssets["assets/"]
+  LocalWorkspace --> LocalPrompts["prompts/"]
+  LocalWorkspace --> CanvasProjects["canvas-projects/"]
+  CanvasProjects --> CanvasFiles["canvas-projects/*/files/"]
+  LocalWorkspace --> WorkbenchLogs["workbench-logs/"]
+  OpscCLI["cmd/opsc CLI"] --> LocalWorkspace
 
   Docker["Docker runtime"] --> NextApp
   Docker --> Gin
-

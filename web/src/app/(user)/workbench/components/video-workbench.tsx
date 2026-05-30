@@ -1,32 +1,36 @@
 "use client";
 
 import { BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, LoaderCircle, Plus, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useEffect, useRef, useState } from "react";
 import { App, Button, Checkbox, Drawer, Empty, Input, Modal, Tag, Typography } from "antd";
-import localforage from "localforage";
 import { nanoid } from "nanoid";
 import { saveAs } from "file-saver";
 
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
+import { LocalWorkspaceStatusAlert } from "@/components/local-workspace/local-workspace-status-alert";
 import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { VideoSettingsPanel, normalizeVideoResolutionValue, normalizeVideoSizeValue, videoSizeLabel } from "@/components/video-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { flowVideoReferenceModeOptions, flowVideoResolutionOptions, flowVideoSecondOptions, flowVideoSizeOptions, isFlowVideoModel } from "@/lib/model-presets";
-import { deleteStoredMedia, resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
-import { resolveImageUrl, uploadImage } from "@/services/image-storage";
+import { resolveMediaUrl } from "@/services/file-storage";
+import { deleteStoredImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { requestVideoGeneration } from "@/services/api/video";
+import type { LocalWorkbenchLogMedia } from "@/services/local-workspace";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { useLocalWorkspaceStore } from "@/stores/use-local-workspace-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { ReferenceImage } from "@/types/image";
+import { blobFromUrl, deleteWorkbenchLogs, listWorkbenchLogs, mediaByKey, saveWorkbenchLog, workbenchLogFileUrl, type WorkbenchLogUpload } from "./workbench-log-storage";
 
 type GeneratedVideo = {
     id: string;
     url: string;
     storageKey: string;
+    workspaceFileKey?: string;
     durationMs: number;
     width: number;
     height: number;
@@ -63,9 +67,6 @@ type GenerationLogConfig = Pick<AiConfig, "model" | "videoModel" | "size" | "vqu
 
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
 
-const LOG_STORE_KEY = "infinite-canvas:video_generation_logs";
-const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
-
 export function VideoWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
     const { message } = App.useApp();
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -75,6 +76,8 @@ export function VideoWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
+    const workspaceStatus = useLocalWorkspaceStore((state) => state.status);
+    const workspaceId = useLocalWorkspaceStore((state) => state.workspace?.id || "");
     const [prompt, setPrompt] = useState("");
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [results, setResults] = useState<GenerationResult[]>([]);
@@ -101,7 +104,7 @@ export function VideoWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
 
     useEffect(() => {
         void refreshLogs();
-    }, []);
+    }, [workspaceStatus, workspaceId]);
 
     const addReferences = async (files?: FileList | null) => {
         const imageFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/")).slice(0, 7 - references.length);
@@ -146,16 +149,17 @@ export function VideoWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
         setStartedAt(batchStartedAt);
         try {
             const blob = await requestVideoGeneration(snapshot.config, snapshot.text, snapshot.references);
-            const stored = await uploadMediaFile(blob, "video");
+            const url = URL.createObjectURL(blob);
+            const meta = await readGeneratedVideoMeta(url);
             const nextVideo: GeneratedVideo = {
                 id: nanoid(),
-                url: stored.url,
-                storageKey: stored.storageKey,
+                url,
+                storageKey: "",
                 durationMs: performance.now() - batchStartedAt,
-                width: stored.width || 1280,
-                height: stored.height || 720,
-                bytes: stored.bytes,
-                mimeType: stored.mimeType,
+                width: meta.width,
+                height: meta.height,
+                bytes: blob.size,
+                mimeType: blob.type || "video/mp4",
             };
             setResults([{ id: nextVideo.id, status: "success", video: nextVideo }]);
             saveLog(buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, durationMs: nextVideo.durationMs, status: "成功", video: nextVideo }));
@@ -192,8 +196,8 @@ export function VideoWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
         saveAs(video.url, "video.mp4");
     };
 
-    const saveResultToAssets = (video: GeneratedVideo) => {
-        addAsset({
+    const saveResultToAssets = async (video: GeneratedVideo) => {
+        const id = await addAsset({
             kind: "video",
             title: "生成视频",
             coverUrl: "",
@@ -202,6 +206,7 @@ export function VideoWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
             data: { url: video.url, storageKey: video.storageKey, width: video.width, height: video.height, bytes: video.bytes, mimeType: video.mimeType },
             metadata: { source: "video-page", prompt },
         });
+        if (!id) return message.error(useAssetStore.getState().lastError || "请先连接本地工作区");
         message.success("已加入我的素材");
     };
 
@@ -216,6 +221,7 @@ export function VideoWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
     };
 
     const createSession = () => {
+        cleanupReferenceStorage(references);
         setPrompt("");
         setReferences([]);
         setResults([]);
@@ -226,11 +232,9 @@ export function VideoWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
     };
 
     const deleteSelectedLogs = () => {
-        const mediaKeys = logs
-            .filter((log) => selectedLogIds.includes(log.id))
-            .map((log) => log.video?.storageKey)
-            .filter((key): key is string => Boolean(key));
-        void Promise.all([deleteStoredMedia(mediaKeys), ...selectedLogIds.map((id) => logStore.removeItem(id))]).then(refreshLogs);
+        void deleteWorkbenchLogs(selectedLogIds)
+            .then(refreshLogs)
+            .catch((error) => message.error(error instanceof Error ? error.message : "删除本地生成记录失败"));
         if (previewLog && selectedLogIds.includes(previewLog.id)) {
             setPreviewLog(null);
             setResults([]);
@@ -240,12 +244,24 @@ export function VideoWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
     };
 
     const saveLog = (log: GenerationLog) => {
-        void logStore.setItem(log.id, serializeLog(log)).then(refreshLogs);
+        void saveVideoGenerationLog(log)
+            .then((savedLog) => {
+                setLogs((value) => mergeGenerationLog(value, savedLog));
+                setResults((value) => replaceResultVideo(value, savedLog.video));
+                setReferences((value) => {
+                    if (!sameReferenceSnapshot(value, log.references)) return value;
+                    cleanupReferenceStorage(log.references);
+                    return savedLog.references || [];
+                });
+                revokeTemporaryVideoUrl(log.video, savedLog.video);
+            })
+            .catch((error) => message.error(error instanceof Error ? error.message : "保存本地生成记录失败"));
     };
 
     const refreshLogs = async () => setLogs(await readStoredLogs());
 
     const previewGenerationLog = (log: GenerationLog) => {
+        cleanupReferenceStorage(references);
         setPreviewLog(log);
         setLogsOpen(false);
         setPrompt(log.prompt);
@@ -276,6 +292,10 @@ export function VideoWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
                                     参数
                                 </Button>
                             </div>
+                        </div>
+
+                        <div className="mt-4">
+                            <LocalWorkspaceStatusAlert message="生成记录会保存到本地工作区" />
                         </div>
 
                         <div className="mt-6 space-y-5">
@@ -310,7 +330,7 @@ export function VideoWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
                                     {references.map((item) => (
                                         <div key={item.id} className="group relative size-20 shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800">
                                             <img src={item.dataUrl} alt={item.name} className="size-full object-cover" />
-                                            <button type="button" className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex" onClick={() => setReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label="移除参考图">
+                                            <button type="button" className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex" onClick={() => removeReference(item.id, setReferences)} aria-label="移除参考图">
                                                 <Trash2 className="size-3.5" />
                                             </button>
                                         </div>
@@ -554,11 +574,25 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
 async function readStoredLogs() {
     if (typeof window === "undefined") return [];
     try {
-        const logs: GenerationLog[] = [];
-        await logStore.iterate<GenerationLog, void>((value) => {
-            logs.push(value);
-        });
-        return (await Promise.all(logs.map(normalizeLog))).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        const logs = await listWorkbenchLogs<Partial<GenerationLog>>("video");
+        return (
+            await Promise.all(
+                logs.map(async (document) =>
+                    normalizeLog({
+                        ...document.payload,
+                        id: document.id,
+                        createdAt: document.data.createdAtMillis || Date.parse(document.createdAt),
+                        title: document.data.title || document.payload.title,
+                        prompt: document.data.prompt || document.payload.prompt,
+                        model: document.data.model || document.payload.model,
+                        status: document.data.status === "error" ? "失败" : document.payload.status,
+                        durationMs: Number(document.data.metrics?.durationMs || document.payload.durationMs || 0),
+                        references: await hydrateReferenceImages(document.id, document.data.media, document.payload.references || []),
+                        video: await hydrateGeneratedVideo(document.id, document.data.media, document.payload.video),
+                    }),
+                ),
+            )
+        ).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     } catch {
         return [];
     }
@@ -592,12 +626,37 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
     };
 }
 
-function serializeLog(log: GenerationLog): GenerationLog {
-    return {
-        ...log,
-        references: log.references.map((item) => ({ ...item, dataUrl: item.storageKey ? "" : item.dataUrl })),
-        video: log.video?.storageKey ? { ...log.video, url: "" } : log.video,
-    };
+function mergeGenerationLog(logs: GenerationLog[], log: GenerationLog) {
+    return [log, ...logs.filter((item) => item.id !== log.id)].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+}
+
+function replaceResultVideo(results: GenerationResult[], video?: GeneratedVideo) {
+    if (!video) return results;
+    return results.map((result) => (result.video?.id === video.id ? { ...result, video } : result));
+}
+
+function removeReference(id: string, setReferences: Dispatch<SetStateAction<ReferenceImage[]>>) {
+    setReferences((value) => {
+        const removed = value.find((item) => item.id === id);
+        cleanupReferenceStorage(removed ? [removed] : []);
+        return value.filter((item) => item.id !== id);
+    });
+}
+
+function cleanupReferenceStorage(references: ReferenceImage[]) {
+    const keys = references.map((item) => item.storageKey).filter((key): key is string => Boolean(key?.startsWith("image:")));
+    if (keys.length) void deleteStoredImages(keys);
+}
+
+function sameReferenceSnapshot(current: ReferenceImage[], snapshot: ReferenceImage[]) {
+    if (current.length !== snapshot.length) return false;
+    return current.every((item, index) => item.id === snapshot[index]?.id && item.storageKey === snapshot[index]?.storageKey && item.dataUrl === snapshot[index]?.dataUrl);
+}
+
+function revokeTemporaryVideoUrl(previous?: GeneratedVideo, next?: GeneratedVideo) {
+    if (!previous?.url?.startsWith("blob:")) return;
+    if (previous.url === next?.url) return;
+    URL.revokeObjectURL(previous.url);
 }
 
 function normalizeLogConfig(log: Partial<GenerationLog>): GenerationLogConfig {
@@ -639,6 +698,98 @@ function buildLog({ prompt, model, config, references, durationMs, status, video
     };
 }
 
+async function saveVideoGenerationLog(log: GenerationLog) {
+    const media: LocalWorkbenchLogMedia[] = [];
+    const files: WorkbenchLogUpload[] = [];
+    const references = await Promise.all(
+        log.references.map(async (item, index) => {
+            const key = `reference_${index}`;
+            const url = item.dataUrl || (await resolveImageUrl(item.storageKey, ""));
+            const blob = await blobFromUrl(url);
+            if (!blob) return item;
+            files.push({ key, blob, fileName: safeWorkbenchFileName(item.name || key, blob.type) });
+            media.push({ key, role: "reference", name: item.name, mime: blob.type || item.type, bytes: blob.size });
+            return { ...item, dataUrl: "", storageKey: "", workspaceFileKey: key };
+        }),
+    );
+    let video = log.video;
+    if (log.video) {
+        const key = "video_0";
+        const blob = await blobFromUrl(log.video.url || (await resolveMediaUrl(log.video.storageKey, "")));
+        if (blob) {
+            files.push({ key, blob, fileName: safeWorkbenchFileName("video.mp4", blob.type || log.video.mimeType) });
+            media.push({ key, role: "result", mime: blob.type || log.video.mimeType, width: log.video.width, height: log.video.height, bytes: log.video.bytes || blob.size, durationMs: log.video.durationMs });
+            video = { ...log.video, url: "", storageKey: "", workspaceFileKey: key, mimeType: blob.type || log.video.mimeType, bytes: log.video.bytes || blob.size };
+        }
+    }
+    const document = await saveWorkbenchLog(
+        "video",
+        {
+            title: log.title,
+            createdAtMillis: log.createdAt,
+            status: log.status === "失败" ? "error" : "success",
+            model: log.model,
+            prompt: log.prompt,
+            media,
+            metrics: { durationMs: log.durationMs },
+            metadata: { size: log.size, resolution: log.resolution, seconds: log.seconds },
+        },
+        { ...log, references, video },
+        files,
+    );
+    const payload = (document.data.payload || {}) as Partial<GenerationLog>;
+    return normalizeLog({
+        ...payload,
+        id: document.id,
+        createdAt: document.data.createdAtMillis || Date.parse(document.createdAt),
+        title: document.data.title || payload.title,
+        prompt: document.data.prompt || payload.prompt,
+        model: document.data.model || payload.model,
+        status: document.data.status === "error" ? "失败" : payload.status,
+        durationMs: Number(document.data.metrics?.durationMs || payload.durationMs || 0),
+        references: await hydrateReferenceImages(document.id, document.data.media, payload.references || []),
+        video: await hydrateGeneratedVideo(document.id, document.data.media, payload.video),
+    });
+}
+
+async function hydrateReferenceImages(logId: string, media: LocalWorkbenchLogMedia[] | undefined, references: ReferenceImage[]) {
+    return Promise.all(
+        references.map(async (item) => {
+            const key = (item as ReferenceImage & { workspaceFileKey?: string }).workspaceFileKey;
+            if (!key) return { ...item, dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl) };
+            const info = mediaByKey(media, key);
+            return { ...item, dataUrl: await workbenchLogFileUrl(logId, key), type: item.type || info?.mime || "image/png", storageKey: "" };
+        }),
+    );
+}
+
+async function hydrateGeneratedVideo(logId: string, media: LocalWorkbenchLogMedia[] | undefined, video?: GeneratedVideo) {
+    if (!video) return video;
+    const key = video.workspaceFileKey;
+    if (!key) return { ...video, url: await resolveMediaUrl(video.storageKey, video.url) };
+    const info = mediaByKey(media, key);
+    return {
+        ...video,
+        url: await workbenchLogFileUrl(logId, key),
+        storageKey: "",
+        width: video.width || info?.width || 1280,
+        height: video.height || info?.height || 720,
+        bytes: video.bytes || info?.bytes || 0,
+        mimeType: video.mimeType || info?.mime || "video/mp4",
+    };
+}
+
+function safeWorkbenchFileName(name: string, mimeType?: string) {
+    const base = name.replace(/[\\/:*?"<>|]+/g, "_").trim() || "file";
+    if (/\.[a-z0-9]{2,8}$/i.test(base)) return base;
+    if (mimeType?.includes("jpeg")) return `${base}.jpg`;
+    if (mimeType?.includes("png")) return `${base}.png`;
+    if (mimeType?.includes("webp")) return `${base}.webp`;
+    if (mimeType?.includes("mp4")) return `${base}.mp4`;
+    if (mimeType?.includes("webm")) return `${base}.webm`;
+    return `${base}.bin`;
+}
+
 function buildVideoConfig(config: AiConfig, model: string): AiConfig {
     return {
         ...config,
@@ -662,4 +813,14 @@ function normalizeVideoSize(value: string) {
 
 function normalizeResolution(value: string) {
     return normalizeVideoResolutionValue(value);
+}
+
+function readGeneratedVideoMeta(url: string) {
+    return new Promise<{ width: number; height: number }>((resolve) => {
+        const video = document.createElement("video");
+        const done = () => resolve({ width: video.videoWidth || 1280, height: video.videoHeight || 720 });
+        video.onloadedmetadata = done;
+        video.onerror = done;
+        video.src = url;
+    });
 }

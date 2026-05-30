@@ -52,13 +52,12 @@ import {
     type PDDStageNode,
 } from "@/services/api/pdd";
 import { requestVideoGeneration } from "@/services/api/video";
-import { uploadMediaFile } from "@/services/file-storage";
-import { uploadImage } from "@/services/image-storage";
 import { defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
+import LocalRunClientPage from "./local-run-client-page";
 
 type DetailTarget = { kind: "stage"; stage: PDDStageNode } | { kind: "product-node"; node: PDDGraphNode; product: PDDProductDetail } | { kind: "artifact"; artifact: PDDArtifact; product: PDDProductDetail } | { kind: "file"; file: PDDDetailFile };
 
@@ -85,6 +84,11 @@ const statusMeta: Record<PDDRunStatus, { label: string; color: string; className
 };
 
 export default function PDDRunClientPage({ runId }: { runId: string }) {
+    if (runId.startsWith("run_")) return <LocalRunClientPage runId={runId} />;
+    return <PDDRemoteRunClientPage runId={runId} />;
+}
+
+function PDDRemoteRunClientPage({ runId }: { runId: string }) {
     const { message, modal } = App.useApp();
     const token = useUserStore((state) => state.token);
     const user = useUserStore((state) => state.user);
@@ -926,7 +930,8 @@ function RunCreativeCanvas({
                     message.warning("当前文本节点没有可保存的内容");
                     return;
                 }
-                addAsset({ kind: "text", title: node.title || "创作画布文本", coverUrl: "", tags: [], source: "PDD 创作画布", data: { content: text }, metadata: { source: "pdd_creative_canvas", runId, productKey, nodeId: node.id } });
+                const id = await addAsset({ kind: "text", title: node.title || "创作画布文本", coverUrl: "", tags: [], source: "PDD 创作画布", data: { content: text }, metadata: { source: "pdd_creative_canvas", runId, productKey, nodeId: node.id } });
+                if (!id) return message.error(useAssetStore.getState().lastError || "请先连接本地工作区");
                 message.success("已加入我的素材");
                 return;
             }
@@ -935,29 +940,33 @@ function RunCreativeCanvas({
                 return;
             }
             if (node.type === CanvasNodeType.Video) {
-                const uploaded = await uploadMediaFile(await (await fetch(content)).blob(), "video");
-                addAsset({
+                const blob = await (await fetch(content)).blob();
+                const url = URL.createObjectURL(blob);
+                const id = await addAsset({
                     kind: "video",
                     title: node.title || "创作画布视频",
                     coverUrl: "",
                     tags: [],
                     source: "PDD 创作画布",
-                    data: { url: uploaded.url, storageKey: uploaded.storageKey, width: uploaded.width || node.width, height: uploaded.height || node.height, bytes: uploaded.bytes, mimeType: uploaded.mimeType },
+                    data: { url, width: node.width, height: node.height, bytes: blob.size, mimeType: blob.type || "video/mp4" },
                     metadata: { source: "pdd_creative_canvas", runId, productKey, nodeId: node.id, prompt: node.metadata?.prompt },
                 });
+                if (!id) return message.error(useAssetStore.getState().lastError || "请先连接本地工作区");
                 message.success("已加入我的素材");
                 return;
             }
-            const uploaded = await uploadImage(await (await fetch(content)).blob());
-            addAsset({
+            const blob = await (await fetch(content)).blob();
+            const url = URL.createObjectURL(blob);
+            const id = await addAsset({
                 kind: "image",
                 title: node.title || "创作画布图片",
-                coverUrl: uploaded.url,
+                coverUrl: url,
                 tags: [],
                 source: "PDD 创作画布",
-                data: { dataUrl: uploaded.url, storageKey: uploaded.storageKey, width: uploaded.width, height: uploaded.height, bytes: uploaded.bytes, mimeType: uploaded.mimeType },
+                data: { dataUrl: url, width: node.width, height: node.height, bytes: blob.size, mimeType: blob.type || "image/png" },
                 metadata: { source: "pdd_creative_canvas", runId, productKey, nodeId: node.id, prompt: node.metadata?.prompt },
             });
+            if (!id) return message.error(useAssetStore.getState().lastError || "请先连接本地工作区");
             message.success("已加入我的素材");
         },
         [addAsset, message, productKey, runId],
@@ -2034,7 +2043,7 @@ function buildCreativeGenerationConfig(config: AiConfig, node: CanvasNodeData | 
 }
 
 function isCreativeAiConfigReady(config: AiConfig, model: string) {
-    return Boolean(model.trim()) && (config.channelMode === "remote" || Boolean(config.baseUrl.trim() && config.apiKey.trim()));
+    return Boolean(model.trim()) && (config.channelMode === "remote" || Boolean(config.baseUrl.trim() && config.secretRefName.trim()));
 }
 
 function getGenerationCount(count: string) {

@@ -1,16 +1,52 @@
 flowchart TB
   subgraph Browser["Browser local state"]
-    CanvasStore["canvas projects"]
-    AssetStore["my assets"]
-    PromptStore["my prompts"]
+    CanvasCache["canvas project cache"]
+    AssetCache["my assets cache"]
+    PromptCache["my prompts cache"]
+    PreviewCache["workbench preview cache"]
+    WorkflowFolderCache["workflow folders cache"]
+    CanvasZip["canvas export/import zip"]
     ConfigStore["AI config"]
     TokenStore["JWT token"]
     IndexedDB[("localforage")]
-    CanvasStore --> IndexedDB
-    AssetStore --> IndexedDB
-    PromptStore --> IndexedDB
+    CanvasCache --> IndexedDB
+    AssetCache --> IndexedDB
+    PromptCache --> IndexedDB
+    PreviewCache --> IndexedDB
     ConfigStore --> IndexedDB
     TokenStore --> IndexedDB
+  end
+
+  subgraph LocalWorkspace["Local workspace"]
+    OpscServe["opsc serve"]
+    LocalCanvases["canvas-projects/"]
+    CanvasFiles["canvas-projects/*/files/"]
+    LocalAssets["assets/"]
+    LocalPrompts["prompts/"]
+    LocalTemplates["templates/"]
+    LocalRuns["runs/"]
+    LocalArtifacts["artifacts/"]
+    WorkspacePrefs["opsc-workspace.json preferences"]
+    LocalWorkbenchLogs["workbench-logs/"]
+    WorkspaceFiles[("~/OpsCanvas")]
+    OpscServe --> LocalCanvases
+    OpscServe --> CanvasFiles
+    OpscServe --> LocalAssets
+    OpscServe --> LocalPrompts
+    OpscServe --> LocalTemplates
+    OpscServe --> LocalRuns
+    OpscServe --> LocalArtifacts
+    OpscServe --> WorkspacePrefs
+    OpscServe --> LocalWorkbenchLogs
+    LocalCanvases --> WorkspaceFiles
+    CanvasFiles --> WorkspaceFiles
+    LocalAssets --> WorkspaceFiles
+    LocalPrompts --> WorkspaceFiles
+    LocalTemplates --> WorkspaceFiles
+    LocalRuns --> WorkspaceFiles
+    LocalArtifacts --> WorkspaceFiles
+    WorkspacePrefs --> WorkspaceFiles
+    LocalWorkbenchLogs --> WorkspaceFiles
   end
 
   subgraph Server["Go API state"]
@@ -35,5 +71,11 @@ flowchart TB
   VideoFiles[("VIDEO_STORAGE_ROOT")] --> Browser
   PDDRuns[("PDD_RUNS_ROOT")] --> Browser
   Templates --> PDDRuns
+  Browser -- "session cookie" --> OpscServe
+  WorkflowFolderCache -. "workspace preferences" .-> OpscServe
+  OpscServe -. "object URLs / summaries" .-> Browser
+  CanvasCache -. "workspaceFileKey metadata" .-> LocalCanvases
+  CanvasFiles -- "export file blobs" --> CanvasZip
+  CanvasZip -- "temporary blob bridge" --> IndexedDB
+  IndexedDB -- "multipart import" --> OpscServe
   Browser --> Server
-

@@ -23,7 +23,7 @@ export function CanvasProjectCard({ project }: { project: CanvasProject }) {
     const selected = selectedIds.includes(project.id);
     const open = () => router.push(`/canvas/${project.id}`);
     const saveTitle = () => {
-        renameProject(project.id, editingTitle);
+        void renameProject(project.id, editingTitle);
         stopEditing();
     };
 

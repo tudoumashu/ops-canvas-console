@@ -3,19 +3,19 @@
 import { Copy, Download, PencilLine, Plus, Search, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { App, Button, Card, Drawer, Empty, Form, Image, Input, Modal, Pagination, Select, Space, Spin, Tabs, Tag, Typography } from "antd";
+import { Alert, App, Button, Card, Drawer, Empty, Form, Image, Input, Modal, Pagination, Select, Space, Spin, Tabs, Tag, Typography } from "antd";
 import { saveAs } from "file-saver";
 
 import { useCopyText } from "@/hooks/use-copy-text";
-import { formatBytes, readFileAsDataUrl } from "@/lib/image-utils";
-import { uploadMediaFile } from "@/services/file-storage";
-import { uploadImage } from "@/services/image-storage";
+import { LocalWorkspaceStatusAlert } from "@/components/local-workspace/local-workspace-status-alert";
+import { formatBytes, readFileAsDataUrl, readImageMeta } from "@/lib/image-utils";
 import { cn } from "@/lib/utils";
 import { useAssetStore, type Asset, type AssetKind, type ImageAsset, type VideoAsset } from "@/stores/use-asset-store";
+import { useLocalWorkspaceStore } from "@/stores/use-local-workspace-store";
 import { fetchAssetLibrary, type AssetLibraryItem } from "@/services/api/assets";
 import { deleteAdminAsset, saveAdminAsset, type AdminAsset } from "@/services/api/admin";
 import { useUserStore } from "@/stores/use-user-store";
-import { exportAssets } from "./asset-transfer";
+import { exportAssets, importAssetPackage } from "./asset-transfer";
 
 type AssetCenterTab = "mine" | "library";
 type MediaFilter = "" | AssetKind;
@@ -97,11 +97,20 @@ export default function AssetsPage() {
     const coverInputRef = useRef<HTMLInputElement>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
     const videoInputRef = useRef<HTMLInputElement>(null);
+    const packageInputRef = useRef<HTMLInputElement>(null);
 
     const assets = useAssetStore((state) => state.assets);
+    const localAssetsWorkspaceLoaded = useAssetStore((state) => state.workspaceLoaded);
+    const localAssetsLoadedWorkspaceId = useAssetStore((state) => state.loadedWorkspaceId);
+    const localAssetsLoading = useAssetStore((state) => state.loading);
+    const localAssetsError = useAssetStore((state) => state.lastError);
+    const loadAssetsFromWorkspace = useAssetStore((state) => state.loadFromWorkspace);
     const addAsset = useAssetStore((state) => state.addAsset);
     const updateAsset = useAssetStore((state) => state.updateAsset);
     const removeAsset = useAssetStore((state) => state.removeAsset);
+    const localWorkspaceStatus = useLocalWorkspaceStore((state) => state.status);
+    const localWorkspace = useLocalWorkspaceStore((state) => state.workspace);
+    const localWorkspaceId = localWorkspace?.id || "";
 
     const [activeTab, setActiveTab] = useState<AssetCenterTab>("mine");
     const [localKeyword, setLocalKeyword] = useState("");
@@ -144,7 +153,9 @@ export default function AssetsPage() {
     const libraryURL = Form.useWatch("url", libraryForm) || "";
     const libraryFormType = Form.useWatch("type", libraryForm) || editingLibraryAsset?.type || "text";
 
-    const validLocalAssets = useMemo(() => assets.filter((asset) => asset.kind === "text" || asset.kind === "image" || asset.kind === "video"), [assets]);
+    const localAssetsReady = localWorkspaceStatus === "connected" && localAssetsWorkspaceLoaded && localAssetsLoadedWorkspaceId === localWorkspaceId;
+    const workspaceAssets = localAssetsReady ? assets : [];
+    const validLocalAssets = useMemo(() => workspaceAssets.filter((asset) => asset.kind === "text" || asset.kind === "image" || asset.kind === "video"), [workspaceAssets]);
     const filteredLocalAssets = useMemo(() => {
         const query = localKeyword.trim().toLowerCase();
         return validLocalAssets.filter((asset) => {
@@ -188,6 +199,10 @@ export default function AssetsPage() {
         }
     }, [message, libraryQuery.error, libraryQuery.isError]);
 
+    useEffect(() => {
+        if (localWorkspaceStatus === "connected" && localWorkspaceId) void loadAssetsFromWorkspace();
+    }, [loadAssetsFromWorkspace, localWorkspaceId, localWorkspaceStatus]);
+
     const openCreateLocalAsset = () => {
         setEditingLocalAsset(null);
         setImageDraft(null);
@@ -230,15 +245,15 @@ export default function AssetsPage() {
 
         if (values.kind === "text") {
             const asset = { ...base, kind: "text" as const, data: { content: (values.content || "").trim() } };
-            editingLocalAsset ? updateAsset(editingLocalAsset.id, asset) : addAsset(asset);
+            if (!(await saveLocalAssetPayload(asset))) return;
         } else if (values.kind === "image") {
-            const image = imageDraft || (values.url?.trim() ? imageDataFromUploaded(await uploadImage(values.url.trim())) : null);
+            const image = imageDraft || (values.url?.trim() ? await imageDataFromUrl(values.url.trim()) : null);
             if (!image) {
                 message.error("请选择图片文件或填写图片 URL");
                 return;
             }
             const asset = { ...base, coverUrl: values.coverUrl?.trim() || image.dataUrl, kind: "image" as const, data: image };
-            editingLocalAsset ? updateAsset(editingLocalAsset.id, asset) : addAsset(asset);
+            if (!(await saveLocalAssetPayload(asset))) return;
         } else {
             const video = videoDraft || (values.url?.trim() ? { url: values.url.trim(), width: 0, height: 0, bytes: 0, mimeType: mimeTypeFromURL(values.url.trim()) } : null);
             if (!video) {
@@ -246,11 +261,29 @@ export default function AssetsPage() {
                 return;
             }
             const asset = { ...base, coverUrl: values.coverUrl?.trim() || video.url, kind: "video" as const, data: video };
-            editingLocalAsset ? updateAsset(editingLocalAsset.id, asset) : addAsset(asset);
+            if (!(await saveLocalAssetPayload(asset))) return;
         }
 
         message.success(editingLocalAsset ? "素材已更新" : "素材已保存");
         setLocalAssetOpen(false);
+    };
+
+    const saveLocalAssetPayload = async (asset: Omit<Asset, "id" | "createdAt" | "updatedAt">) => {
+        if (editingLocalAsset) {
+            await updateAsset(editingLocalAsset.id, asset);
+        } else {
+            const id = await addAsset(asset);
+            if (!id) {
+                message.error(useAssetStore.getState().lastError || "请先连接本地工作区");
+                return false;
+            }
+        }
+        const error = useAssetStore.getState().lastError;
+        if (error) {
+            message.error(error);
+            return false;
+        }
+        return true;
     };
 
     const readCoverFile = async (file?: File) => {
@@ -261,8 +294,9 @@ export default function AssetsPage() {
 
     const readImageFile = async (file?: File) => {
         if (!file || !file.type.startsWith("image/")) return;
-        const image = await uploadImage(file);
-        const draft = { dataUrl: image.url, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType };
+        const url = URL.createObjectURL(file);
+        const meta = await readImageMeta(url);
+        const draft = { dataUrl: url, width: meta.width, height: meta.height, bytes: file.size, mimeType: file.type || meta.mimeType };
         setImageDraft(draft);
         localForm.setFieldValue("url", draft.dataUrl);
         if (!localForm.getFieldValue("coverUrl")) localForm.setFieldValue("coverUrl", draft.dataUrl);
@@ -271,8 +305,9 @@ export default function AssetsPage() {
 
     const readVideoFile = async (file?: File) => {
         if (!file || !file.type.startsWith("video/")) return;
-        const video = await uploadMediaFile(file, "asset-video");
-        const draft = { url: video.url, storageKey: video.storageKey, width: video.width || 0, height: video.height || 0, bytes: video.bytes, mimeType: video.mimeType };
+        const url = URL.createObjectURL(file);
+        const meta = await readVideoMeta(url);
+        const draft = { url, width: meta.width, height: meta.height, bytes: file.size, mimeType: file.type || "video/mp4" };
         setVideoDraft(draft);
         localForm.setFieldValue("url", draft.url);
         if (!localForm.getFieldValue("coverUrl")) localForm.setFieldValue("coverUrl", draft.url);
@@ -297,9 +332,34 @@ export default function AssetsPage() {
         await exportAssets(validLocalAssets);
     };
 
-    const confirmDeleteLocalAsset = () => {
+    const importLocalAssetPackage = async (file?: File) => {
+        if (!file) return;
+        try {
+            if (localWorkspaceStatus !== "connected") {
+                message.warning("请先连接本地工作区");
+                return;
+            }
+            const result = await importAssetPackage(file, addAsset);
+            if (!result.imported) {
+                message.error("导入失败，请选择有效的素材压缩包");
+                return;
+            }
+            message.success(result.failed ? `已导入 ${result.imported} 个素材，${result.failed} 个失败` : `已导入 ${result.imported} 个素材`);
+        } catch {
+            message.error("导入失败，请选择有效的素材压缩包");
+        } finally {
+            if (packageInputRef.current) packageInputRef.current.value = "";
+        }
+    };
+
+    const confirmDeleteLocalAsset = async () => {
         if (!deletingLocalAsset) return;
-        removeAsset(deletingLocalAsset.id);
+        await removeAsset(deletingLocalAsset.id);
+        const error = useAssetStore.getState().lastError;
+        if (error) {
+            message.error(error);
+            return;
+        }
         message.success("素材已删除");
         setDeletingLocalAsset(null);
     };
@@ -307,20 +367,20 @@ export default function AssetsPage() {
     const copyLibraryAssetToMine = async (asset: AssetLibraryItem) => {
         try {
             if (asset.type === "image") {
-                const dataUrl = await remoteImageToDataUrl(asset.url || asset.coverUrl);
-                const image = await uploadImage(dataUrl);
-                addAsset({
+                const image = await imageDataFromUrl(asset.url || asset.coverUrl);
+                const id = await addAsset({
                     kind: "image",
                     title: asset.title,
-                    coverUrl: image.url,
+                    coverUrl: image.dataUrl,
                     tags: asset.tags || [],
                     source: assetSourceLabel("cloud_asset"),
                     note: asset.description,
-                    data: { dataUrl: image.url, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType },
+                    data: { dataUrl: image.dataUrl, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType },
                     metadata: { source: "cloud_asset", assetId: asset.id, purpose: normalizeAssetPurposeValue(asset.purpose), categoryPath: normalizeAssetCategoryPath(asset.categoryPath || asset.category, asset.purpose) },
                 });
+                if (!id) throw new Error(useAssetStore.getState().lastError || "请先连接本地工作区");
             } else if (asset.type === "video") {
-                addAsset({
+                const id = await addAsset({
                     kind: "video",
                     title: asset.title,
                     coverUrl: asset.coverUrl,
@@ -330,8 +390,9 @@ export default function AssetsPage() {
                     data: { url: asset.url, width: 0, height: 0, bytes: 0, mimeType: mimeTypeFromURL(asset.url) },
                     metadata: { source: "cloud_asset", assetId: asset.id, purpose: normalizeAssetPurposeValue(asset.purpose), categoryPath: normalizeAssetCategoryPath(asset.categoryPath || asset.category, asset.purpose) },
                 });
+                if (!id) throw new Error(useAssetStore.getState().lastError || "请先连接本地工作区");
             } else {
-                addAsset({
+                const id = await addAsset({
                     kind: "text",
                     title: asset.title,
                     coverUrl: asset.coverUrl,
@@ -341,6 +402,7 @@ export default function AssetsPage() {
                     data: { content: asset.content },
                     metadata: { source: "cloud_asset", assetId: asset.id, purpose: normalizeAssetPurposeValue(asset.purpose), categoryPath: normalizeAssetCategoryPath(asset.categoryPath || asset.category, asset.purpose) },
                 });
+                if (!id) throw new Error(useAssetStore.getState().lastError || "请先连接本地工作区");
             }
             message.success("已复制到我的素材");
         } catch {
@@ -440,7 +502,7 @@ export default function AssetsPage() {
                 <div className="pb-8">
                     <div className="mx-auto max-w-5xl text-center">
                         <h1 className="text-4xl font-semibold tracking-tight text-stone-950 dark:text-stone-100">素材中心</h1>
-                        <p className="mt-3 text-sm text-stone-500 dark:text-stone-400">统一管理浏览器本地素材和服务器素材库，按来源安全使用。</p>
+                        <p className="mt-3 text-sm text-stone-500 dark:text-stone-400">统一管理本地工作区素材和服务器素材库，按来源安全使用。</p>
                     </div>
                 </div>
 
@@ -463,6 +525,9 @@ export default function AssetsPage() {
 	                                            }}
 	                                        />
 	                                        <div className="space-y-6">
+                                                <LocalWorkspaceStatusAlert message="我的素材现在以本地工作区为事实源" />
+                                                {localAssetsError && localWorkspaceStatus === "connected" ? <Alert type="error" showIcon message={localAssetsError} /> : null}
+                                                {localWorkspace ? <Alert type="info" showIcon message={`当前工作区：${localWorkspace.name}`} /> : null}
 	                                            <div className="rounded-2xl border border-stone-200 bg-background/80 p-4 dark:border-stone-800 dark:bg-stone-950/60">
 	                                                <div className="space-y-4">
 	                                                    <Input.Search
@@ -519,21 +584,30 @@ export default function AssetsPage() {
 	                                                            <button type="button" className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300" onClick={() => void exportAllLocalAssets()}>
 	                                                                导出素材
 	                                                            </button>
+	                                                            <button type="button" className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300" onClick={() => packageInputRef.current?.click()}>
+	                                                                导入素材包
+	                                                            </button>
 	                                                            <button type="button" className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300" onClick={openCreateLocalAsset}>
-	                                                                导入素材
+	                                                                新增素材
 	                                                            </button>
 	                                                        </div>
 	                                                    </div>
 	                                                </div>
 	                                            </div>
 
+                                        {localAssetsLoading ? (
+                                            <div className="flex h-60 items-center justify-center">
+                                                <Spin />
+                                            </div>
+                                        ) : (
 	                                        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                                             {visibleLocalAssets.map((asset) => (
                                                 <AssetCard key={asset.id} asset={asset} onOpen={() => setPreviewLocalAsset(asset)} onEdit={() => openEditLocalAsset(asset)} onCopy={copyLocalAssetText} onDownload={downloadLocalAsset} onDelete={() => setDeletingLocalAsset(asset)} />
                                             ))}
                                         </div>
+                                        )}
 
-                                        {!visibleLocalAssets.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有找到素材" className="py-20" /> : null}
+                                        {!localAssetsLoading && !visibleLocalAssets.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有找到素材" className="py-20" /> : null}
 
                                         <div className="flex justify-center">
                                             <Pagination
@@ -676,8 +750,18 @@ export default function AssetsPage() {
                     />
                 </div>
             </main>
+            <input
+                ref={packageInputRef}
+                type="file"
+                accept="application/zip,.zip"
+                className="hidden"
+                onChange={(event) => {
+                    void importLocalAssetPackage(event.target.files?.[0]);
+                    event.target.value = "";
+                }}
+            />
 
-            <Modal title={editingLocalAsset ? "编辑我的素材" : "导入我的素材"} open={localAssetOpen} width={980} onCancel={() => setLocalAssetOpen(false)} onOk={() => void saveLocalAsset()} okText="保存" cancelText="取消" destroyOnHidden>
+            <Modal title={editingLocalAsset ? "编辑我的素材" : "新增我的素材"} open={localAssetOpen} width={980} onCancel={() => setLocalAssetOpen(false)} onOk={() => void saveLocalAsset()} okText="保存" cancelText="取消" destroyOnHidden>
                 <div className="grid gap-6 pt-1 lg:grid-cols-[minmax(0,1fr)_320px]">
                     <Form form={localForm} layout="vertical" requiredMark={false} initialValues={{ kind: "text", tags: [] }}>
                         <Form.Item name="kind" label="类型" rules={[{ required: true, message: "请选择类型" }]}>
@@ -844,8 +928,8 @@ export default function AssetsPage() {
                 }}
             />
 
-            <Modal title="删除我的素材" open={Boolean(deletingLocalAsset)} onCancel={() => setDeletingLocalAsset(null)} onOk={confirmDeleteLocalAsset} okText="删除" okButtonProps={{ danger: true }} cancelText="取消">
-                确定删除「{deletingLocalAsset?.title}」吗？删除后会从浏览器本地我的素材中移除。
+            <Modal title="删除我的素材" open={Boolean(deletingLocalAsset)} onCancel={() => setDeletingLocalAsset(null)} onOk={() => void confirmDeleteLocalAsset()} okText="删除" okButtonProps={{ danger: true }} cancelText="取消">
+                确定删除「{deletingLocalAsset?.title}」吗？删除后会从本地工作区我的素材中移除。
             </Modal>
 
             <Modal title="删除素材库素材" open={Boolean(deletingLibraryAsset)} onCancel={() => setDeletingLibraryAsset(null)} onOk={() => void confirmDeleteLibraryAsset()} okText="删除" okButtonProps={{ danger: true }} cancelText="取消">
@@ -1228,20 +1312,13 @@ function assetSourceLabel(value?: string) {
     return assetSourceOptions.find((item) => item.value === normalizeAssetSourceValue(value))?.label || "云端素材";
 }
 
-function imageDataFromUploaded(image: { url: string; storageKey: string; width: number; height: number; bytes: number; mimeType: string }): NonNullable<ImageDraft> {
-    return { dataUrl: image.url, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType };
-}
-
-async function remoteImageToDataUrl(url: string) {
+async function imageDataFromUrl(url: string): Promise<NonNullable<ImageDraft>> {
     const response = await fetch(url);
     if (!response.ok) throw new Error("download image failed");
     const blob = await response.blob();
-    return new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ""));
-        reader.onerror = () => reject(new Error("读取图片失败"));
-        reader.readAsDataURL(blob);
-    });
+    const objectUrl = URL.createObjectURL(blob);
+    const meta = await readImageMeta(objectUrl);
+    return { dataUrl: objectUrl, width: meta.width, height: meta.height, bytes: blob.size, mimeType: blob.type || meta.mimeType };
 }
 
 function mimeTypeFromURL(value: string) {
@@ -1261,6 +1338,16 @@ function mimeExtension(mimeType: string) {
     if (mimeType.includes("mp4")) return "mp4";
     if (mimeType.includes("webm")) return "webm";
     return "png";
+}
+
+function readVideoMeta(url: string) {
+    return new Promise<{ width: number; height: number }>((resolve) => {
+        const video = document.createElement("video");
+        const done = () => resolve({ width: video.videoWidth || 1280, height: video.videoHeight || 720 });
+        video.onloadedmetadata = done;
+        video.onerror = done;
+        video.src = url;
+    });
 }
 
 function sortedUnique(values: string[]) {

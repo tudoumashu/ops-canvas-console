@@ -4,15 +4,17 @@ import { Edit3, FolderPlus, Search, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { type UIEvent, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { App, Button, Empty, Form, Input, Modal, Select, Spin, Tabs } from "antd";
+import { Alert, App, Button, Empty, Form, Input, Modal, Select, Spin, Tabs } from "antd";
 
 import { PromptCard } from "@/components/prompts/prompt-card";
 import { PromptDetailDialog } from "@/components/prompts/prompt-detail-dialog";
 import { usePromptList } from "@/components/prompts/use-prompt-list";
+import { LocalWorkspaceStatusAlert } from "@/components/local-workspace/local-workspace-status-alert";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { cn } from "@/lib/utils";
 import { deleteAdminPrompt, saveAdminPrompt } from "@/services/api/admin";
 import { ALL_PROMPTS_OPTION, type Prompt } from "@/services/api/prompts";
+import { useLocalWorkspaceStore } from "@/stores/use-local-workspace-store";
 import { usePromptStore, type MyPrompt } from "@/stores/use-prompt-store";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -56,9 +58,17 @@ export default function PromptsPage() {
     const user = useUserStore((state) => state.user);
     const isAdmin = user?.role === "admin" && Boolean(token);
     const prompts = usePromptStore((state) => state.prompts);
+    const promptsWorkspaceLoaded = usePromptStore((state) => state.workspaceLoaded);
+    const promptsLoadedWorkspaceId = usePromptStore((state) => state.loadedWorkspaceId);
+    const promptsLoading = usePromptStore((state) => state.loading);
+    const promptsError = usePromptStore((state) => state.lastError);
+    const loadPromptsFromWorkspace = usePromptStore((state) => state.loadFromWorkspace);
     const addPrompt = usePromptStore((state) => state.addPrompt);
     const updatePrompt = usePromptStore((state) => state.updatePrompt);
     const removePrompt = usePromptStore((state) => state.removePrompt);
+    const localWorkspaceStatus = useLocalWorkspaceStore((state) => state.status);
+    const localWorkspace = useLocalWorkspaceStore((state) => state.workspace);
+    const localWorkspaceId = localWorkspace?.id || "";
 
     const [activeTab, setActiveTab] = useState<PromptCenterTab>("mine");
     const [libraryKeyword, setLibraryKeyword] = useState("");
@@ -85,9 +95,11 @@ export default function PromptsPage() {
         stage: libraryPurpose,
     });
 
+    const minePromptsReady = localWorkspaceStatus === "connected" && promptsWorkspaceLoaded && promptsLoadedWorkspaceId === localWorkspaceId;
+    const minePrompts = minePromptsReady ? prompts : [];
     const filteredMinePrompts = useMemo(() => {
         const queryText = mineKeyword.trim().toLowerCase();
-        return prompts.filter((prompt) => {
+        return minePrompts.filter((prompt) => {
             if (mineMedia && prompt.domain !== mineMedia) return false;
             if (minePurpose && prompt.stage !== minePurpose) return false;
             if (mineSource && prompt.source !== mineSource) return false;
@@ -95,18 +107,22 @@ export default function PromptsPage() {
             if (!queryText) return true;
             return [prompt.title, prompt.prompt, prompt.source, prompt.note || "", (prompt.tags || []).join(" ")].join(" ").toLowerCase().includes(queryText);
         });
-    }, [mineKeyword, mineMedia, minePurpose, mineSource, mineTags, prompts]);
-    const mineAvailableTags = useMemo(() => sortedUnique(prompts.filter((prompt) => !mineMedia || prompt.domain === mineMedia).flatMap((prompt) => prompt.tags || [])), [mineMedia, prompts]);
-    const mineAvailableStages = useMemo(() => sortedUnique(prompts.filter((prompt) => !mineMedia || prompt.domain === mineMedia).map((prompt) => prompt.stage).filter(Boolean)), [mineMedia, prompts]);
-    const mineSourceOptions = useMemo(() => [{ label: "全部来源", value: "" }, ...sortedUnique(prompts.map((prompt) => prompt.source)).map((source) => ({ label: promptSourceLabel(source), value: source }))], [prompts]);
+    }, [mineKeyword, mineMedia, minePrompts, minePurpose, mineSource, mineTags]);
+    const mineAvailableTags = useMemo(() => sortedUnique(minePrompts.filter((prompt) => !mineMedia || prompt.domain === mineMedia).flatMap((prompt) => prompt.tags || [])), [mineMedia, minePrompts]);
+    const mineAvailableStages = useMemo(() => sortedUnique(minePrompts.filter((prompt) => !mineMedia || prompt.domain === mineMedia).map((prompt) => prompt.stage).filter(Boolean)), [mineMedia, minePrompts]);
+    const mineSourceOptions = useMemo(() => [{ label: "全部来源", value: "" }, ...sortedUnique(minePrompts.map((prompt) => prompt.source)).map((source) => ({ label: promptSourceLabel(source), value: source }))], [minePrompts]);
     const librarySourceOptions = useMemo(() => [{ label: "全部来源", value: ALL_PROMPTS_OPTION }, ...(facets?.categories || []).map((category) => ({ label: promptSourceLabel(category), value: category }))], [facets?.categories]);
 
     useEffect(() => {
         if (query.isError) message.error(query.error instanceof Error ? query.error.message : "获取提示词失败");
     }, [message, query.error, query.isError]);
 
-    const savePromptToMine = (item: Prompt) => {
-        addPrompt({
+    useEffect(() => {
+        if (localWorkspaceStatus === "connected" && localWorkspaceId) void loadPromptsFromWorkspace();
+    }, [loadPromptsFromWorkspace, localWorkspaceId, localWorkspaceStatus]);
+
+    const savePromptToMine = async (item: Prompt) => {
+        const id = await addPrompt({
             title: item.title,
             prompt: item.prompt,
             coverUrl: item.coverUrl,
@@ -116,6 +132,10 @@ export default function PromptsPage() {
             source: item.category || "prompt-library",
             metadata: { source: "prompt-library", promptId: item.id, githubUrl: item.githubUrl, model: item.model, mode: item.mode },
         });
+        if (!id) {
+            message.error(usePromptStore.getState().lastError || "请先连接本地工作区");
+            return;
+        }
         message.success("已加入我的提示词");
     };
 
@@ -144,9 +164,24 @@ export default function PromptsPage() {
             note: values.note?.trim(),
             metadata: editingPrompt?.metadata || { source: "manual" },
         };
-        editingPrompt ? updatePrompt(editingPrompt.id, payload) : addPrompt(payload);
+        if (editingPrompt) {
+            await updatePrompt(editingPrompt.id, payload);
+        } else {
+            const id = await addPrompt(payload);
+            if (!id) {
+                message.error(usePromptStore.getState().lastError || "请先连接本地工作区");
+                return;
+            }
+        }
         message.success(editingPrompt ? "提示词已更新" : "提示词已保存");
         setPromptFormOpen(false);
+    };
+
+    const deleteMinePrompt = async (id: string) => {
+        await removePrompt(id);
+        const error = usePromptStore.getState().lastError;
+        if (error) message.error(error);
+        else message.success("提示词已删除");
     };
 
     const openCreatePublicPrompt = () => {
@@ -231,7 +266,7 @@ export default function PromptsPage() {
                 <div className="pb-8">
                     <div className="mx-auto max-w-5xl text-center">
                         <h1 className="text-4xl font-semibold tracking-tight text-stone-950 dark:text-stone-100">提示词中心</h1>
-                        <p className="mt-3 text-sm text-stone-500 dark:text-stone-400">统一管理公共提示词库和浏览器本地提示词，按用途、来源和自由标签快速查找。</p>
+                        <p className="mt-3 text-sm text-stone-500 dark:text-stone-400">统一管理公共提示词库和本地工作区提示词，按用途、来源和自由标签快速查找。</p>
                     </div>
                 </div>
                 <div className="mx-auto max-w-7xl">
@@ -243,46 +278,51 @@ export default function PromptsPage() {
                                 key: "mine",
                                 label: "我的提示词",
                                 children: (
-                                    <PromptLibrarySection
-                                        keyword={mineKeyword}
-                                        setKeyword={setMineKeyword}
-                                        media={mineMedia}
-                                        setMedia={(value) => {
-                                            setMineMedia(value);
-                                            setMinePurpose("");
-                                        }}
-                                        purpose={minePurpose}
-                                        setPurpose={setMinePurpose}
-                                        source={mineSource}
-                                        setSource={setMineSource}
-                                        sourceOptions={mineSourceOptions}
-                                        tags={mineTags}
-                                        setTags={setMineTags}
-                                        tagOptions={mineAvailableTags}
-                                        availableStages={mineAvailableStages}
-                                        countText={`当前可选：${promptPurposeOptionsForMedia(mineMedia, mineAvailableStages).length - 1} 个用途、${mineAvailableTags.length} 个自由标签`}
-                                        onReset={resetMineFilters}
-                                        loading={false}
-                                        items={filteredMinePrompts.map(myPromptToPrompt)}
-                                        total={filteredMinePrompts.length}
-                                        onOpen={setSelectedPrompt}
-                                        onCopy={(prompt) => copyText(prompt.prompt, "提示词已复制")}
-                                        extraAction={(prompt) => (
-                                            <>
-                                                <Button size="small" onClick={() => openEditMinePrompt(prompt.metadata?.localPrompt as MyPrompt)}>
-                                                    编辑
-                                                </Button>
-                                                <Button size="small" danger icon={<Trash2 className="size-3.5" />} onClick={() => removePrompt(prompt.id)}>
-                                                    删除
-                                                </Button>
-                                            </>
-                                        )}
-                                        headerAction={
-                                            <button type="button" className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300" onClick={openCreateMinePrompt}>
-                                                新增提示词
-                                            </button>
-                                        }
-                                    />
+                                    <div className="space-y-4">
+                                        <LocalWorkspaceStatusAlert message="我的提示词现在以本地工作区为事实源" />
+                                        {promptsError && localWorkspaceStatus === "connected" ? <Alert type="error" showIcon message={promptsError} /> : null}
+                                        {localWorkspace ? <Alert type="info" showIcon message={`当前工作区：${localWorkspace.name}`} /> : null}
+                                        <PromptLibrarySection
+                                            keyword={mineKeyword}
+                                            setKeyword={setMineKeyword}
+                                            media={mineMedia}
+                                            setMedia={(value) => {
+                                                setMineMedia(value);
+                                                setMinePurpose("");
+                                            }}
+                                            purpose={minePurpose}
+                                            setPurpose={setMinePurpose}
+                                            source={mineSource}
+                                            setSource={setMineSource}
+                                            sourceOptions={mineSourceOptions}
+                                            tags={mineTags}
+                                            setTags={setMineTags}
+                                            tagOptions={mineAvailableTags}
+                                            availableStages={mineAvailableStages}
+                                            countText={`当前可选：${promptPurposeOptionsForMedia(mineMedia, mineAvailableStages).length - 1} 个用途、${mineAvailableTags.length} 个自由标签`}
+                                            onReset={resetMineFilters}
+                                            loading={promptsLoading}
+                                            items={filteredMinePrompts.map(myPromptToPrompt)}
+                                            total={filteredMinePrompts.length}
+                                            onOpen={setSelectedPrompt}
+                                            onCopy={(prompt) => copyText(prompt.prompt, "提示词已复制")}
+                                            extraAction={(prompt) => (
+                                                <>
+                                                    <Button size="small" onClick={() => openEditMinePrompt(prompt.metadata?.localPrompt as MyPrompt)}>
+                                                        编辑
+                                                    </Button>
+                                                    <Button size="small" danger icon={<Trash2 className="size-3.5" />} onClick={() => void deleteMinePrompt(prompt.id)}>
+                                                        删除
+                                                    </Button>
+                                                </>
+                                            )}
+                                            headerAction={
+                                                <button type="button" className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300" onClick={openCreateMinePrompt}>
+                                                    新增提示词
+                                                </button>
+                                            }
+                                        />
+                                    </div>
                                 ),
                             },
                             {
@@ -315,7 +355,7 @@ export default function PromptsPage() {
                                         onCopy={(prompt) => copyText(prompt.prompt, "提示词已复制")}
                                         extraAction={(prompt) => (
                                             <>
-                                                <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => savePromptToMine(prompt)}>
+                                                <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => void savePromptToMine(prompt)}>
                                                     加入我的提示词
                                                 </Button>
                                                 {isAdmin ? (

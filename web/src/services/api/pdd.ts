@@ -286,6 +286,7 @@ export type WorkflowTemplate = {
     title: string;
     description: string;
     spec: WorkflowTemplateSpec;
+    revision?: number;
     createdAt: string;
     updatedAt: string;
 };

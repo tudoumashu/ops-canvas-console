@@ -1,13 +1,13 @@
 "use client";
 
 import { BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
-import type { ReactNode } from "react";
+import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useEffect, useRef, useState } from "react";
 import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Tag, Typography } from "antd";
-import localforage from "localforage";
 import { saveAs } from "file-saver";
 
 import { ImageSettingsPanel } from "@/components/image-settings-panel";
+import { LocalWorkspaceStatusAlert } from "@/components/local-workspace/local-workspace-status-alert";
 import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
@@ -19,13 +19,17 @@ import { nanoid } from "nanoid";
 import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { requestEdit, requestGeneration } from "@/services/api/image";
 import { deleteStoredImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
+import type { LocalWorkbenchLogMedia } from "@/services/local-workspace";
 import { useAssetStore } from "@/stores/use-asset-store";
 import type { ReferenceImage } from "@/types/image";
+import { useLocalWorkspaceStore } from "@/stores/use-local-workspace-store";
+import { blobFromUrl, deleteWorkbenchLogs, listWorkbenchLogs, mediaByKey, saveWorkbenchLog, workbenchLogFileUrl, type WorkbenchLogUpload } from "./workbench-log-storage";
 
 type GeneratedImage = {
     id: string;
     dataUrl: string;
     storageKey?: string;
+    workspaceFileKey?: string;
     durationMs: number;
     width: number;
     height: number;
@@ -64,9 +68,6 @@ type GenerationLogConfig = Pick<AiConfig, "model" | "imageModel" | "quality" | "
 
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
 
-const LOG_STORE_KEY = "infinite-canvas:image_generation_logs";
-const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
-
 export function ImageWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
     const { message } = App.useApp();
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -76,6 +77,8 @@ export function ImageWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
+    const workspaceStatus = useLocalWorkspaceStore((state) => state.status);
+    const workspaceId = useLocalWorkspaceStore((state) => state.workspace?.id || "");
     const [prompt, setPrompt] = useState("");
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [results, setResults] = useState<GenerationResult[]>([]);
@@ -103,7 +106,7 @@ export function ImageWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
 
     useEffect(() => {
         void refreshLogs();
-    }, []);
+    }, [workspaceStatus, workspaceId]);
 
     const addReferences = async (files?: FileList | null) => {
         const imageFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/"));
@@ -168,12 +171,6 @@ export function ImageWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
         const failed = result.find((item): item is PromiseRejectedResult => item.status === "rejected");
 
         try {
-            const logImages = await Promise.all(
-                successImages.map(async (image) => {
-                    const stored = await uploadImage(image.dataUrl);
-                    return { ...image, dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
-                }),
-            );
             saveLog(
                 buildLog({
                     prompt: text,
@@ -184,7 +181,7 @@ export function ImageWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
                     successCount,
                     failCount,
                     status: successCount ? "成功" : "失败",
-                    images: logImages,
+                    images: successImages,
                 }),
             );
             successCount ? message.success("图片已生成") : message.error(failed?.reason instanceof Error ? failed.reason.message : "生成失败");
@@ -204,16 +201,16 @@ export function ImageWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
     };
 
     const saveResultToAssets = async (image: GeneratedImage, index: number) => {
-        const stored = await uploadImage(image.dataUrl);
-        addAsset({
+        const id = await addAsset({
             kind: "image",
             title: `生成结果 ${index + 1}`,
-            coverUrl: stored.url,
+            coverUrl: image.dataUrl,
             tags: [],
             source: "我的工作台",
-            data: { dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType },
+            data: { dataUrl: image.dataUrl, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType || "image/png" },
             metadata: { source: "image-page", prompt },
         });
+        if (!id) return message.error(useAssetStore.getState().lastError || "请先连接本地工作区");
         message.success("已加入我的素材");
     };
 
@@ -230,6 +227,7 @@ export function ImageWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
     };
 
     const createSession = () => {
+        cleanupReferenceStorage(references);
         setPrompt("");
         setReferences([]);
         setResults([]);
@@ -240,8 +238,9 @@ export function ImageWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
     };
 
     const deleteSelectedLogs = () => {
-        const imageKeys = logs.filter((log) => selectedLogIds.includes(log.id)).flatMap((log) => log.images.map((image) => image.storageKey).filter((key): key is string => Boolean(key)));
-        void Promise.all([deleteStoredImages(imageKeys), ...selectedLogIds.map((id) => logStore.removeItem(id))]).then(refreshLogs);
+        void deleteWorkbenchLogs(selectedLogIds)
+            .then(refreshLogs)
+            .catch((error) => message.error(error instanceof Error ? error.message : "删除本地生成记录失败"));
         if (previewLog && selectedLogIds.includes(previewLog.id)) {
             setPreviewLog(null);
             setResults([]);
@@ -251,12 +250,23 @@ export function ImageWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
     };
 
     const saveLog = (log: GenerationLog) => {
-        void logStore.setItem(log.id, serializeLog(log)).then(refreshLogs);
+        void saveImageGenerationLog(log)
+            .then((savedLog) => {
+                setLogs((value) => mergeGenerationLog(value, savedLog));
+                setResults((value) => replaceResultImages(value, savedLog.images));
+                setReferences((value) => {
+                    if (!sameReferenceSnapshot(value, log.references)) return value;
+                    cleanupReferenceStorage(log.references);
+                    return savedLog.references || [];
+                });
+            })
+            .catch((error) => message.error(error instanceof Error ? error.message : "保存本地生成记录失败"));
     };
 
     const refreshLogs = async () => setLogs(await readStoredLogs());
 
     const previewGenerationLog = async (log: GenerationLog) => {
+        cleanupReferenceStorage(references);
         setPreviewLog(log);
         setLogsOpen(false);
         setPrompt(log.prompt);
@@ -337,6 +347,10 @@ export function ImageWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
                             </div>
                         </div>
 
+                        <div className="mt-4">
+                            <LocalWorkspaceStatusAlert message="生成记录会保存到本地工作区" />
+                        </div>
+
                         <div className="mt-6 space-y-5">
                             <div>
                                 <div className="mb-2 flex items-center justify-between gap-3">
@@ -379,7 +393,7 @@ export function ImageWorkbench({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
                                             <button
                                                 type="button"
                                                 className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex"
-                                                onClick={() => setReferences((value) => value.filter((ref) => ref.id !== item.id))}
+                                                onClick={() => removeReference(item.id, setReferences)}
                                                 aria-label="移除参考图"
                                             >
                                                 <Trash2 className="size-3.5" />
@@ -583,6 +597,33 @@ function updateResultAt(results: GenerationResult[], index: number, next: Partia
     return results.map((item, itemIndex) => (itemIndex === index ? { ...item, ...next } : item));
 }
 
+function mergeGenerationLog(logs: GenerationLog[], log: GenerationLog) {
+    return [log, ...logs.filter((item) => item.id !== log.id)].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+}
+
+function replaceResultImages(results: GenerationResult[], images: GeneratedImage[]) {
+    const imageById = new Map(images.map((image) => [image.id, image]));
+    return results.map((result) => (result.image && imageById.has(result.image.id) ? { ...result, image: imageById.get(result.image.id) } : result));
+}
+
+function removeReference(id: string, setReferences: Dispatch<SetStateAction<ReferenceImage[]>>) {
+    setReferences((value) => {
+        const removed = value.find((item) => item.id === id);
+        cleanupReferenceStorage(removed ? [removed] : []);
+        return value.filter((item) => item.id !== id);
+    });
+}
+
+function cleanupReferenceStorage(references: ReferenceImage[]) {
+    const keys = references.map((item) => item.storageKey).filter((key): key is string => Boolean(key?.startsWith("image:")));
+    if (keys.length) void deleteStoredImages(keys);
+}
+
+function sameReferenceSnapshot(current: ReferenceImage[], snapshot: ReferenceImage[]) {
+    if (current.length !== snapshot.length) return false;
+    return current.every((item, index) => item.id === snapshot[index]?.id && item.storageKey === snapshot[index]?.storageKey && item.dataUrl === snapshot[index]?.dataUrl);
+}
+
 function LogPanel({
     logs,
     selectedLogIds,
@@ -689,11 +730,26 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
 async function readStoredLogs() {
     if (typeof window === "undefined") return [];
     try {
-        const values: GenerationLog[] = [];
-        await logStore.iterate<GenerationLog, void>((value) => {
-            values.push(value);
-        });
-        const logs = await Promise.all(values.map(normalizeLog));
+        const values = await listWorkbenchLogs<Partial<GenerationLog>>("image");
+        const logs = await Promise.all(
+            values.map(async (document) =>
+                normalizeLog({
+                    ...document.payload,
+                    id: document.id,
+                    createdAt: document.data.createdAtMillis || Date.parse(document.createdAt),
+                    title: document.data.title || document.payload.title,
+                    prompt: document.data.prompt || document.payload.prompt,
+                    model: document.data.model || document.payload.model,
+                    status: document.data.status === "error" ? "失败" : document.payload.status,
+                    durationMs: Number(document.data.metrics?.durationMs || document.payload.durationMs || 0),
+                    successCount: Number(document.data.metrics?.successCount || document.payload.successCount || 0),
+                    failCount: Number(document.data.metrics?.failCount || document.payload.failCount || 0),
+                    imageCount: Number(document.data.metrics?.imageCount || document.payload.imageCount || 0),
+                    references: await hydrateReferenceImages(document.id, document.data.media, document.payload.references || []),
+                    images: await hydrateGeneratedImages(document.id, document.data.media, document.payload.images || []),
+                }),
+            ),
+        );
         return logs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     } catch {
         return [];
@@ -732,15 +788,6 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         status: log.status || "成功",
         images,
         thumbnails: images.map((image) => image.dataUrl),
-    };
-}
-
-function serializeLog(log: GenerationLog): GenerationLog {
-    return {
-        ...log,
-        references: log.references.map((item) => ({ ...item, dataUrl: item.storageKey ? "" : item.dataUrl })),
-        images: log.images.map((image) => ({ ...image, dataUrl: image.storageKey ? "" : image.dataUrl })),
-        thumbnails: [],
     };
 }
 
@@ -801,4 +848,101 @@ function buildLog({
         images,
         thumbnails: images.map((image) => image.dataUrl),
     };
+}
+
+async function saveImageGenerationLog(log: GenerationLog) {
+    const media: LocalWorkbenchLogMedia[] = [];
+    const files: WorkbenchLogUpload[] = [];
+    const references = await Promise.all(
+        log.references.map(async (item, index) => {
+            const key = `reference_${index}`;
+            const url = item.dataUrl || (await resolveImageUrl(item.storageKey, ""));
+            const blob = await blobFromUrl(url);
+            if (!blob) return item;
+            files.push({ key, blob, fileName: safeWorkbenchFileName(item.name || key, blob.type) });
+            media.push({ key, role: "reference", name: item.name, mime: blob.type || item.type, bytes: blob.size });
+            return { ...item, dataUrl: "", storageKey: "", workspaceFileKey: key };
+        }),
+    );
+    const images = await Promise.all(
+        log.images.map(async (image, index) => {
+            const key = `image_${index}`;
+            const blob = await blobFromUrl(image.dataUrl || (await resolveImageUrl(image.storageKey, "")));
+            if (!blob) return image;
+            files.push({ key, blob, fileName: safeWorkbenchFileName(`${key}.png`, blob.type || image.mimeType) });
+            media.push({ key, role: "result", mime: blob.type || image.mimeType, width: image.width, height: image.height, bytes: image.bytes || blob.size, durationMs: image.durationMs });
+            return { ...image, dataUrl: "", storageKey: "", workspaceFileKey: key, mimeType: blob.type || image.mimeType, bytes: image.bytes || blob.size };
+        }),
+    );
+    const document = await saveWorkbenchLog(
+        "image",
+        {
+            title: log.title,
+            createdAtMillis: log.createdAt,
+            status: log.status === "失败" ? "error" : "success",
+            model: log.model,
+            prompt: log.prompt,
+            media,
+            metrics: { durationMs: log.durationMs, successCount: log.successCount, failCount: log.failCount, imageCount: log.imageCount },
+            metadata: { size: log.size, quality: log.quality },
+        },
+        { ...log, references, images, thumbnails: [] },
+        files,
+    );
+    const payload = (document.data.payload || {}) as Partial<GenerationLog>;
+    return normalizeLog({
+        ...payload,
+        id: document.id,
+        createdAt: document.data.createdAtMillis || Date.parse(document.createdAt),
+        title: document.data.title || payload.title,
+        prompt: document.data.prompt || payload.prompt,
+        model: document.data.model || payload.model,
+        status: document.data.status === "error" ? "失败" : payload.status,
+        durationMs: Number(document.data.metrics?.durationMs || payload.durationMs || 0),
+        successCount: Number(document.data.metrics?.successCount || payload.successCount || 0),
+        failCount: Number(document.data.metrics?.failCount || payload.failCount || 0),
+        imageCount: Number(document.data.metrics?.imageCount || payload.imageCount || 0),
+        references: await hydrateReferenceImages(document.id, document.data.media, payload.references || []),
+        images: await hydrateGeneratedImages(document.id, document.data.media, payload.images || []),
+    });
+}
+
+async function hydrateReferenceImages(logId: string, media: LocalWorkbenchLogMedia[] | undefined, references: ReferenceImage[]) {
+    return Promise.all(
+        references.map(async (item) => {
+            const key = (item as ReferenceImage & { workspaceFileKey?: string }).workspaceFileKey;
+            if (!key) return { ...item, dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl) };
+            const info = mediaByKey(media, key);
+            return { ...item, dataUrl: await workbenchLogFileUrl(logId, key), type: item.type || info?.mime || "image/png", storageKey: "" };
+        }),
+    );
+}
+
+async function hydrateGeneratedImages(logId: string, media: LocalWorkbenchLogMedia[] | undefined, images: GeneratedImage[]) {
+    return Promise.all(
+        images.map(async (item) => {
+            const key = item.workspaceFileKey;
+            if (!key) return { ...item, dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl) };
+            const info = mediaByKey(media, key);
+            return {
+                ...item,
+                dataUrl: await workbenchLogFileUrl(logId, key),
+                storageKey: "",
+                width: item.width || info?.width || 0,
+                height: item.height || info?.height || 0,
+                bytes: item.bytes || info?.bytes || 0,
+                mimeType: item.mimeType || info?.mime,
+            };
+        }),
+    );
+}
+
+function safeWorkbenchFileName(name: string, mimeType?: string) {
+    const base = name.replace(/[\\/:*?"<>|]+/g, "_").trim() || "file";
+    if (/\.[a-z0-9]{2,8}$/i.test(base)) return base;
+    if (mimeType?.includes("jpeg")) return `${base}.jpg`;
+    if (mimeType?.includes("png")) return `${base}.png`;
+    if (mimeType?.includes("webp")) return `${base}.webp`;
+    if (mimeType?.includes("gif")) return `${base}.gif`;
+    return `${base}.bin`;
 }

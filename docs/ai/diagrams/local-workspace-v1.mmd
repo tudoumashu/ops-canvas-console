@@ -1,0 +1,83 @@
+flowchart LR
+  Agent["Codex / Claude Code"] --> CLI["cmd/opsc CLI"]
+  Agent --> MCP["opsc mcp stdio"]
+  Browser["Web UI"] -- "launch secret -> session" --> Serve["opsc serve"]
+  Browser --> BrowserCache[("UI cache")]
+  MCP -- "read/diagnostic tools" --> CLI
+  MCP -- "index rebuild tool" --> Serve
+  Serve --> Core["internal/localworkspace"]
+  CLI --> Core
+  Core --> IndexOps["index update / rebuild"]
+  Core --> ExportPlan["export plan rules"]
+  Core --> GCPlan["gc dry-run plan"]
+  Core --> ProjectGuard["project path guard"]
+
+  subgraph Workspace["~/OpsCanvas"]
+    WorkspaceFile["opsc-workspace.json"]
+    Control[".opsc control"]
+    RootSalt[".opsc/project-root.salt"]
+    Profiles["profiles/"]
+    Projects["projects/"]
+    Templates["templates/"]
+    Runs["runs/"]
+    Artifacts["artifacts/"]
+    Assets["assets/"]
+    Prompts["prompts/"]
+    CanvasProjects["canvas-projects/"]
+    CanvasFiles["canvas-projects/*/files/"]
+    WorkbenchLogs["workbench-logs/"]
+    Cache["cache/"]
+    Index[("index.sqlite")]
+  end
+
+  Core --> WorkspaceFile
+  Core --> Control
+  Core --> RootSalt
+  Core --> Profiles
+  Core --> Projects
+  Core --> Templates
+  Core --> Runs
+  Core --> Artifacts
+  Core --> Assets
+  Core --> Prompts
+  Core --> CanvasProjects
+  Core --> CanvasFiles
+  Core --> WorkbenchLogs
+  Core --> Cache
+  Core --> Index
+  IndexOps --> Index
+  subgraph RuntimeState["XDG state"]
+    Runtime["serve.json / pid / port"]
+    Token["bearer.token"]
+    Session["launch.secret / sessions.json"]
+    Locks["serve.lock / workspace.write.lock"]
+  end
+
+  Serve --> Runtime
+  Serve --> Token
+  Serve --> Session
+  Core --> Locks
+  BrowserCache -. "opsc:*_cache:v1" .-> Browser
+  Serve -. "my assets" .-> Assets
+  Serve -. "my prompts" .-> Prompts
+  Serve -. "workflow templates" .-> Templates
+  Serve -. "canvas projects" .-> CanvasProjects
+  Serve -. "canvas media" .-> CanvasFiles
+  Serve -. "workbench logs" .-> WorkbenchLogs
+
+  ExportPlan -. "exclude control dirs" .-> Control
+  ExportPlan -. "exclude root salt" .-> RootSalt
+  ExportPlan -. "exclude cache" .-> Cache
+  ExportPlan -. "exclude derived index" .-> Index
+  ExportPlan -. "exclude local rootPath docs" .-> Projects
+  GCPlan -. "review orphan refs" .-> Artifacts
+  GCPlan -. "review broken refs" .-> Runs
+  GCPlan -. "review missing files" .-> Assets
+  GCPlan -. "review missing content" .-> Prompts
+  GCPlan -. "review missing canvas media" .-> CanvasFiles
+  GCPlan -. "review missing media" .-> WorkbenchLogs
+
+  ProjectGuard --> Projects
+  Projects -. "path refs only" .-> LocalProjects["external local projects"]
+  Profiles -. "env/keychain refs" .-> ModelProviders["model providers"]
+  CLI -. "explicit publish/upload/share" .-> Cloud["cloud / VPS"]

@@ -103,12 +103,53 @@ Local agent：
 go run ./cmd/local-agent --server http://127.0.0.1:13000 --token "$LOCAL_AGENT_TOKEN" --root /path/to/local/repo
 ```
 
+Local workspace foundation：
+
+```bash
+go run ./cmd/opsc workspace init --workspace ~/OpsCanvas --json
+go run ./cmd/opsc workspace info --workspace ~/OpsCanvas --json
+go run ./cmd/opsc workspace doctor --workspace ~/OpsCanvas --json
+go run ./cmd/opsc workspace index rebuild --workspace ~/OpsCanvas --json
+go run ./cmd/opsc workspace export plan --workspace ~/OpsCanvas --json
+go run ./cmd/opsc workspace gc plan --workspace ~/OpsCanvas --json
+go run ./cmd/opsc profile list --workspace ~/OpsCanvas --json
+go run ./cmd/opsc project list --workspace ~/OpsCanvas --json
+go run ./cmd/opsc template list --workspace ~/OpsCanvas --json
+go run ./cmd/opsc run list --workspace ~/OpsCanvas --json
+go run ./cmd/opsc run status <run_id> --workspace ~/OpsCanvas --json
+go run ./cmd/opsc run events <run_id> --workspace ~/OpsCanvas
+go run ./cmd/opsc run events <run_id> --workspace ~/OpsCanvas --follow
+go run ./cmd/opsc artifact list --workspace ~/OpsCanvas --json
+go run ./cmd/opsc artifact list --run <run_id> --workspace ~/OpsCanvas --json
+go run ./cmd/opsc asset list --workspace ~/OpsCanvas --json
+go run ./cmd/opsc prompt list --workspace ~/OpsCanvas --json
+go run ./cmd/opsc serve --workspace ~/OpsCanvas --port 17680 --origin http://127.0.0.1:3000
+go run ./cmd/opsc mcp --workspace ~/OpsCanvas
+```
+
+默认 workspace 解析顺序是 `--workspace`、`OPSC_WORKSPACE`、`~/OpsCanvas`。默认 JSON 输出不包含 workspace 绝对路径；需要路径时显式加 `--show-paths`。`workspace doctor` 的人类诊断输出到 stderr，`--json` 模式下 stdout 才输出机器可读 report。`workspace export plan` 只输出相对路径和排除原因；`workspace gc plan` 只做 dry-run，输出相对路径 candidates，动作固定为 `review`，不会删除文件；`project list` 不输出 `rootPath`，只输出 opaque `rootFingerprint`；`profile list` 不输出 secret 值。`run events` 输出 JSONL 事件流，每行一个 event envelope，不使用 `{ ok, data, warnings }` 包装；`--follow` 会持续轮询追加事件直到调用方中断。
+
+`opsc serve` 默认只监听 `127.0.0.1:17680`，`--port 0` 可使用系统空闲端口，`--origin` 只接受明确的本地浏览器 origin，不接受 `*`。启动后 runtime/state 文件位于 `$XDG_STATE_HOME/opsc/workspaces/<workspaceId>-<rootHash>/`，无 XDG 时 fallback 到 `~/.local/state/opsc/workspaces/<workspaceId>-<rootHash>/`；state 目录权限应为 0700，`bearer.token`、`launch.secret` 和 `sessions.json` 权限应为 0600。CLI 或显式 HTTP client 可用 `Authorization: Bearer <bearer.token>`，browser 应用 `launch.secret` 调 `POST /api/local/bootstrap/session` 换 HttpOnly session；带 `Origin` 的请求不接受 bearer。`GET /health` 和 `GET /api/health` 免鉴权且只返回 `ok`；其它 `/api/local/*` 需要 session 或 bearer。`serve.json`、`workspace info` 和 `--json` 启动输出不得包含 token、launch secret、session id 或 workspace 绝对路径。
+
+`opsc mcp` 是本地 agent 的 stdio MCP server。开发期可直接用 `go run ./cmd/opsc mcp --workspace ~/OpsCanvas`，实际配置 Codex / Claude Code 等 MCP client 时建议先构建 `opsc` 二进制，再把 command 指向该二进制并传 `["mcp", "--workspace", "/home/<user>/OpsCanvas"]`。首版工具只做 workspace 查询、doctor、index rebuild、export/GC dry-run、template/run/artifact/profile/project/asset/prompt 列表和 run status/events；不暴露 canonical object 写入工具、不暴露 `run events --follow`，默认不输出 secrets、workspace 绝对路径或 project `rootPath`。`opsc_workspace_index_rebuild` 是唯一维护写工具，调用前必须先启动同一 workspace 的 `opsc serve`；该工具只从 runtime state 读取相对 `bearer.token` 并调用 loopback `/api/local/workspace/index/rebuild`，不会把 token、token 文件路径或 serve URL 写入 MCP 输出。
+
+Web UI 本地工作区连接：
+
+1. 启动 `go run ./cmd/opsc serve --workspace ~/OpsCanvas --port 17680 --origin <当前 Web origin>`。
+2. 在顶部导航点击本地工作区按钮，服务地址使用与 Web origin 同一 loopback host，例如 Web 是 `http://localhost:3000` 时优先填 `http://localhost:17680`，避免 `SameSite=Lax` cookie 因 `localhost` / `127.0.0.1` 混用不发送。
+3. 从 runtime/state 目录读取本次启动的 `launch.secret`，输入后建立 browser session。不要把 `bearer.token` 填到浏览器或写进 `localStorage`。
+4. `我的素材`、`我的提示词`、画布项目库、工作台 text/image/video 生成记录、电商工作流私有模板和工作流入口自定义文件夹通过 `opsc serve` 读写 workspace；图片/视频工作台结果保存成功后从 workbench-log 文件端点回显；浏览器 localforage/localStorage 只保留 `opsc:asset_store_cache:v1`、`opsc:prompt_store_cache:v1`、`opsc:canvas_store_cache:v1` 展示缓存、loopback `baseUrl` 或生成中/上传中的临时媒体状态。旧 `infinite-canvas:*`、`text_generation_logs`、`image_generation_logs`、`video_generation_logs`、`ops-canvas-workflow-folders` 测试数据不迁移。本地模板当前只支持 CRUD，不启动 PDD/VPS run。
+
 ## Test / Typecheck / Build Commands
 
 仓库可用命令：
 
 ```bash
 go test ./...
+```
+
+```bash
+go test ./internal/localworkspace ./cmd/opsc
 ```
 
 ```bash
@@ -163,4 +204,4 @@ docker compose -f docker-compose.pdd-console.yml up -d --build
 - PDD console 读不到 run：确认 `PDD_RUNS_ROOT` 和 Docker volume 映射，run id 必须匹配 `^[A-Za-z0-9_.-]+$`。
 - PDD allowlist 动作失败：确认 `PDD_CONSOLE_READ_ONLY=false`、`PDD_ACTION_NSENTER=true`、容器 privileged/host pid/network，以及宿主机命令存在。
 - Local agent 无任务或报 token 错：确认服务端和本地 CLI 使用同一个 `LOCAL_AGENT_TOKEN`，且脚本路径在 `--root` 内。
-
+- Local workspace GC 显示候选项：先检查 `workspace gc plan --json` 的 `reason` 和 `referencedBy`，当前命令不会删除文件；如怀疑 index 漂移，先运行 `workspace index rebuild --json`，再重新查看 GC plan。

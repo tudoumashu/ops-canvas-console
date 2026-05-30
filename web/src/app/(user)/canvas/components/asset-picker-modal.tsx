@@ -2,12 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { App, Empty, Input, Modal, Pagination, Spin, Tabs, Tag } from "antd";
+import { Alert, App, Empty, Input, Modal, Pagination, Spin, Tabs, Tag } from "antd";
 import { Search } from "lucide-react";
 import axios from "axios";
 
 import { cn } from "@/lib/utils";
 import { useAssetStore, type Asset } from "@/stores/use-asset-store";
+import { useLocalWorkspaceStore } from "@/stores/use-local-workspace-store";
 import { fetchAssetLibrary, type AssetLibraryItem } from "@/services/api/assets";
 
 export type AssetPickerTab = "my-assets" | "library";
@@ -184,17 +185,25 @@ async function remoteImageToDataUrl(url: string) {
 
 function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => void }) {
     const assets = useAssetStore((state) => state.assets);
+    const workspaceLoaded = useAssetStore((state) => state.workspaceLoaded);
+    const loadedWorkspaceId = useAssetStore((state) => state.loadedWorkspaceId);
+    const loading = useAssetStore((state) => state.loading);
+    const lastError = useAssetStore((state) => state.lastError);
+    const loadFromWorkspace = useAssetStore((state) => state.loadFromWorkspace);
+    const localWorkspaceStatus = useLocalWorkspaceStore((state) => state.status);
+    const localWorkspaceId = useLocalWorkspaceStore((state) => state.workspace?.id || "");
     const [keyword, setKeyword] = useState("");
     const [kindFilter, setKindFilter] = useState("all");
     const [page, setPage] = useState(1);
 
     const filtered = useMemo(() => {
         const query = keyword.trim().toLowerCase();
-        return assets
+        const readyAssets = localWorkspaceStatus === "connected" && workspaceLoaded && loadedWorkspaceId === localWorkspaceId ? assets : [];
+        return readyAssets
             .filter((a) => a.kind === "text" || a.kind === "image" || a.kind === "video")
             .filter((a) => kindFilter === "all" || a.kind === kindFilter)
             .filter((a) => !query || [a.title, ...(a.tags || [])].join(" ").toLowerCase().includes(query));
-    }, [assets, keyword, kindFilter]);
+    }, [assets, keyword, kindFilter, loadedWorkspaceId, localWorkspaceId, localWorkspaceStatus, workspaceLoaded]);
 
     const visible = useMemo(() => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [filtered, page]);
 
@@ -202,6 +211,10 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
         const maxPage = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
         setPage((v) => Math.min(v, maxPage));
     }, [filtered.length]);
+
+    useEffect(() => {
+        if (localWorkspaceStatus === "connected" && localWorkspaceId) void loadFromWorkspace();
+    }, [loadFromWorkspace, localWorkspaceId, localWorkspaceStatus]);
 
     const handleInsert = (asset: Asset) => {
         if (asset.kind === "text") {
@@ -213,6 +226,8 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
 
     return (
         <div className="space-y-4">
+            {localWorkspaceStatus !== "connected" ? <Alert type="warning" showIcon message="请先连接本地工作区后使用我的素材。" /> : null}
+            {lastError && localWorkspaceStatus === "connected" ? <Alert type="error" showIcon message={lastError} /> : null}
             <div className="flex flex-wrap items-center gap-3">
                 <Input
                     className="w-56"
@@ -243,7 +258,11 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
                 </div>
             </div>
 
-            {visible.length ? (
+            {loading ? (
+                <div className="flex justify-center py-16">
+                    <Spin />
+                </div>
+            ) : visible.length ? (
                 <div className="grid grid-cols-4 gap-3">
                     {visible.map((asset) => (
                         <PickerCard key={asset.id} title={asset.title} kind={asset.kind} cover={asset.coverUrl || (asset.kind === "image" ? asset.data.dataUrl : "")} onClick={() => handleInsert(asset)} />

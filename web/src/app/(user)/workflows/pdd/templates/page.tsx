@@ -9,6 +9,8 @@ import type { ColumnsType } from "antd/es/table";
 import { Copy, Plus, RefreshCw, Trash2, Workflow } from "lucide-react";
 
 import { deletePDDWorkflowTemplate, fetchPDDWorkflowTemplates, savePDDWorkflowTemplate, type WorkflowTemplate } from "@/services/api/pdd";
+import { deleteLocalPDDWorkflowTemplate, fetchLocalPDDWorkflowTemplates, saveLocalPDDWorkflowTemplate } from "@/services/local-workflow-templates";
+import { useLocalWorkspaceStore } from "@/stores/use-local-workspace-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 type TemplateKind = "full" | "simple" | "v2";
@@ -132,14 +134,18 @@ export default function PDDWorkflowTemplatesPage() {
     const router = useRouter();
     const token = useUserStore((state) => state.token);
     const user = useUserStore((state) => state.user);
+    const localWorkspaceStatus = useLocalWorkspaceStore((state) => state.status);
+    const localWorkspace = useLocalWorkspaceStore((state) => state.workspace);
+    const localWorkspaceBaseUrl = useLocalWorkspaceStore((state) => state.baseUrl);
+    const useLocalTemplates = localWorkspaceStatus === "connected" && Boolean(localWorkspace);
     const [keyword, setKeyword] = useState("");
     const query = useQuery({
-        queryKey: ["pdd-workflow-templates", token],
-        queryFn: () => fetchPDDWorkflowTemplates(token || ""),
-        enabled: Boolean(token),
+        queryKey: ["pdd-workflow-templates", useLocalTemplates ? "local" : "server", useLocalTemplates ? localWorkspaceBaseUrl : token],
+        queryFn: () => (useLocalTemplates ? fetchLocalPDDWorkflowTemplates(localWorkspaceBaseUrl) : fetchPDDWorkflowTemplates(token || "")),
+        enabled: useLocalTemplates || Boolean(token),
     });
     const createMutation = useMutation({
-        mutationFn: (kind: TemplateKind) => savePDDWorkflowTemplate(defaultTemplate(kind), token || ""),
+        mutationFn: (kind: TemplateKind) => (useLocalTemplates ? saveLocalPDDWorkflowTemplate(localWorkspaceBaseUrl, defaultTemplate(kind)) : savePDDWorkflowTemplate(defaultTemplate(kind), token || "")),
         onSuccess: (template) => {
             message.success("模板已创建");
             router.push(`/workflows/ecommerce/templates/${encodeURIComponent(template.id)}`);
@@ -185,7 +191,7 @@ export default function PDDWorkflowTemplatesPage() {
                         size="small"
                         icon={<Copy className="size-3.5" />}
                         onClick={() =>
-                            void savePDDWorkflowTemplate({ ...item, id: "", title: `${item.title} 副本` }, token || "")
+                            void (useLocalTemplates ? saveLocalPDDWorkflowTemplate(localWorkspaceBaseUrl, { ...item, id: "", title: `${item.title} 副本` }) : savePDDWorkflowTemplate({ ...item, id: "", title: `${item.title} 副本` }, token || ""))
                                 .then(() => {
                                     message.success("已复制");
                                     void query.refetch();
@@ -203,7 +209,8 @@ export default function PDDWorkflowTemplatesPage() {
                                 content: `确认删除「${item.title}」？`,
                                 okButtonProps: { danger: true },
                                 onOk: async () => {
-                                    await deletePDDWorkflowTemplate(item.id, token || "");
+                                    if (useLocalTemplates) await deleteLocalPDDWorkflowTemplate(localWorkspaceBaseUrl, item.id);
+                                    else await deletePDDWorkflowTemplate(item.id, token || "");
                                     message.success("已删除");
                                     await query.refetch();
                                 },
@@ -215,12 +222,12 @@ export default function PDDWorkflowTemplatesPage() {
         },
     ];
 
-    if (!token || !user) {
+    if (!useLocalTemplates && (!token || !user)) {
         return (
             <main className="flex h-full items-center justify-center bg-background px-6 text-foreground">
                 <Card className="w-full max-w-md">
                     <Typography.Title level={3}>需要登录</Typography.Title>
-                    <Typography.Paragraph type="secondary">工作流模板需要管理员登录后访问。</Typography.Paragraph>
+                    <Typography.Paragraph type="secondary">连接本地工作区后可编辑私有模板；未连接时需要管理员登录访问服务器模板。</Typography.Paragraph>
                     <Button type="primary" href="/login">
                         去登录
                     </Button>
@@ -235,7 +242,7 @@ export default function PDDWorkflowTemplatesPage() {
                 <header className="flex flex-wrap items-end justify-between gap-4 border-b border-stone-200 pb-5 dark:border-stone-800">
                     <div>
                         <Typography.Text type="secondary" className="text-xs">
-                            Ecommerce / Templates
+                            {useLocalTemplates ? `Local Workspace / ${localWorkspace?.name || "Templates"}` : "Ecommerce / Templates"}
                         </Typography.Text>
                         <Typography.Title level={2} className="!mb-0 !mt-2">
                             电商工作流模板
