@@ -46,6 +46,23 @@ type HybridEcommerceImportResult struct {
 	Remote           hybridRemoteTemplateBrief `json:"remote"`
 }
 
+type HybridEcommerceRunOptions struct {
+	WorkspacePath string
+	TemplateID    string
+	ProfileID     string
+	ChannelID     string
+	Input         map[string]any
+}
+
+type HybridEcommerceRunResult struct {
+	Run              Envelope[RunData] `json:"run"`
+	TemplateID       string            `json:"templateId"`
+	RemoteTemplateID string            `json:"remoteTemplateId"`
+	ProfileID        string            `json:"profileId,omitempty"`
+	ChannelID        string            `json:"channelId,omitempty"`
+	Warnings         []string          `json:"warnings,omitempty"`
+}
+
 type hybridRemoteTemplateBrief struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
@@ -217,6 +234,86 @@ func ImportHybridEcommerceTemplate(ctx context.Context, opts HybridEcommerceImpo
 	return result, nil
 }
 
+func CreateHybridEcommerceRun(ctx context.Context, opts HybridEcommerceRunOptions) (HybridEcommerceRunResult, error) {
+	workspace, err := Open(opts.WorkspacePath)
+	if err != nil {
+		return HybridEcommerceRunResult{}, err
+	}
+	templateID := strings.TrimSpace(opts.TemplateID)
+	if templateID == "" {
+		return HybridEcommerceRunResult{}, NewError(ErrorInvalidArgument, "template id is required", 1, nil)
+	}
+	template, err := ReadTemplate(*workspace, templateID)
+	if err != nil {
+		return HybridEcommerceRunResult{}, err
+	}
+	config, ok, err := hybridEcommerceConfigFromTemplate(template)
+	if err != nil {
+		return HybridEcommerceRunResult{}, err
+	}
+	if !ok {
+		return HybridEcommerceRunResult{}, NewError(ErrorWorkspaceInvalid, "template is not a hybrid ecommerce template", 2, map[string]string{"templateId": template.ID})
+	}
+	runInput := hybridRunInputWithTemplateDefaults(opts.Input, template)
+	if err := validateNoPlaintextSecrets(runInput, "hybrid_ecommerce.run.input"); err != nil {
+		return HybridEcommerceRunResult{}, err
+	}
+	profileID := firstNonEmptyString(strings.TrimSpace(opts.ProfileID), config.ProfileID)
+	channelID := firstNonEmptyString(strings.TrimSpace(opts.ChannelID), config.ChannelID)
+	run, err := NewRun(*workspace, RunData{
+		TemplateID: template.ID,
+		Status:     RunStatusPending,
+		ProfileID:  profileID,
+		Input:      runInput,
+		Metadata: map[string]any{
+			"source":           "opsc_ecommerce_cli",
+			"workflowType":     firstNonEmptyString(template.Data.WorkflowType, "pdd"),
+			"templateTitle":    template.Data.Title,
+			"templateRevision": template.Revision,
+			"executor":         "opsc",
+			hybridEcommerceKey: map[string]any{
+				"backend":          hybridEcommerceBackend,
+				"remoteTemplateId": config.RemoteTemplateID,
+				"profileId":        profileID,
+				"channelId":        channelID,
+			},
+		},
+	})
+	if err != nil {
+		return HybridEcommerceRunResult{}, err
+	}
+	if err := SaveRun(*workspace, run, SaveRunOptions{TemplateSnapshot: &template}); err != nil {
+		return HybridEcommerceRunResult{}, err
+	}
+	if err := writeHybridTemplatePendingNodeStates(*workspace, run.ID, template); err != nil {
+		return HybridEcommerceRunResult{}, err
+	}
+	if _, err := AppendRunEvent(*workspace, run.ID, RunEventInput{
+		Type:    "run.waiting_for_executor",
+		Level:   "info",
+		Actor:   RunEventActor{Type: "cli", ID: "opsc"},
+		Message: "Hybrid ecommerce run created, waiting for executor.",
+		Data: map[string]any{
+			"templateId":       template.ID,
+			"remoteTemplateId": config.RemoteTemplateID,
+			"workflowType":     firstNonEmptyString(template.Data.WorkflowType, "pdd"),
+		},
+	}); err != nil {
+		return HybridEcommerceRunResult{}, err
+	}
+	saved, err := ReadRun(*workspace, run.ID)
+	if err != nil {
+		return HybridEcommerceRunResult{}, err
+	}
+	return HybridEcommerceRunResult{
+		Run:              saved,
+		TemplateID:       template.ID,
+		RemoteTemplateID: config.RemoteTemplateID,
+		ProfileID:        profileID,
+		ChannelID:        channelID,
+	}, nil
+}
+
 func upsertHybridEcommerceTemplate(workspace Workspace, remote hybridPDDTemplate, config hybridEcommerceConfig) (Envelope[TemplateData], bool, error) {
 	remote.ID = strings.TrimSpace(remote.ID)
 	if remote.ID == "" {
@@ -302,6 +399,56 @@ func findHybridTemplate(workspace Workspace, remoteTemplateID string) (Envelope[
 		}
 	}
 	return Envelope[TemplateData]{}, false, nil
+}
+
+func hybridRunInputWithTemplateDefaults(input map[string]any, template Envelope[TemplateData]) map[string]any {
+	data := cloneMap(input)
+	if data == nil {
+		data = map[string]any{}
+	}
+	if _, ok := data["inputs"]; !ok {
+		data["inputs"] = []map[string]any{}
+	}
+	for _, key := range []string{"productConcurrency", "maxRetries"} {
+		if _, ok := data[key]; ok || template.Data.Settings == nil {
+			continue
+		}
+		if value, ok := template.Data.Settings[key]; ok {
+			data[key] = value
+		}
+	}
+	return data
+}
+
+func writeHybridTemplatePendingNodeStates(workspace Workspace, runID string, template Envelope[TemplateData]) error {
+	for _, raw := range template.Data.Nodes {
+		var node struct {
+			ID        string `json:"id"`
+			Title     string `json:"title"`
+			Type      string `json:"type"`
+			Operation string `json:"operation"`
+		}
+		if err := json.Unmarshal(raw, &node); err != nil || strings.TrimSpace(node.ID) == "" {
+			continue
+		}
+		state, err := NewRunNodeState(node.ID, RunNodeStateData{
+			NodeID: node.ID,
+			Status: RunStatusPending,
+			Metadata: map[string]any{
+				"source":    "hybrid_ecommerce_template",
+				"title":     node.Title,
+				"type":      node.Type,
+				"operation": node.Operation,
+			},
+		})
+		if err != nil {
+			return err
+		}
+		if err := WriteRunNodeState(workspace, runID, state); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func executeHybridEcommerceRun(ctx context.Context, workspace Workspace, run Envelope[RunData], template Envelope[TemplateData], opts ExecutorOptions, config hybridEcommerceConfig) (ExecutorRunResult, error) {

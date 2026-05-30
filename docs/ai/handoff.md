@@ -2,7 +2,7 @@
 
 ## Current Objective
 
-Phase 11 hybrid ecommerce backend MVP 已接到 `opsc executor`：local workspace 仍是 canonical source；已确认的远端 PDD 电商模板可通过 `opsc ecommerce import-template` 重建为本地 template，executor 使用 profile/channel `secretRef` 调 VPS PDD API 创建远端 run、同步状态和关键 artifact，再写回本地 run/node state/events/artifact ref。现有 PDD/VPS run 历史不迁移，VPS run dir 不作为事实源，浏览器不保存或发送 VPS admin credential，MCP 写面不扩大。
+Phase 11 hybrid ecommerce backend MVP 已接到 `opsc executor`：local workspace 仍是 canonical source；已确认的远端 PDD 电商模板可通过 `opsc ecommerce import-template` 重建为本地 template，并通过 `opsc ecommerce create-run` 创建 pending local run、template snapshot、pending node state 和 `run.waiting_for_executor` event；executor 使用 profile/channel `secretRef` 调 VPS PDD API 创建远端 run、同步状态和关键 artifact，再写回本地 run/node state/events/artifact ref。现有 PDD/VPS run 历史不迁移，VPS run dir 不作为事实源，浏览器不保存或发送 VPS admin credential，MCP 写面不扩大。
 
 ## Completed Work
 
@@ -12,7 +12,7 @@ Phase 11 hybrid ecommerce backend MVP 已接到 `opsc executor`：local workspac
 - Phase 9 收口继续补充 executor 写入后的 index rebuild 回归，并用 `/tmp/opsc-phase9-manual` fake provider 手工 smoke 验证 `opsc executor` 可把固定本地素材、文本生成和图片生成 run 执行到 success；真实浏览器 Web UI 端到端仍保留在 `docs/pending-test.md`。
 - Phase 10 继续扩展 `internal/localworkspace` executor：run `projectId` 会读取 `projects/<proj_id>/project.json` 并校验 adapter、root fingerprint、capability、path safety 和 `artifact.write`；新增 `condition` 节点、project/local `script` 节点、`source/target` edge fallback、`fromHandle`/condition 路由跳过、节点级 retry 和相对路径 project output mapping。
 - Phase 10 Web UI 本地模板启动参数允许透传 `profileId/projectId` 到 local run；新增 `tools/local_workspace_browser_smoke.py`，用于已有 `opsc serve` 和 Next dev server 下复测 browser bootstrap session、本地模板/run 状态页和 artifact 预览。
-- Phase 11 新增 `internal/localworkspace/hybrid_ecommerce.go` 和 `opsc ecommerce import-template`：通过 profile/channel `secretRef` 读取 VPS PDD template，写入本地 hybrid template metadata；executor 遇到 `hybridEcommerce.backend=vps_pdd` 会创建远端 run、轮询 overview/product-detail、下载 image/video/key artifact 并写回 local canonical artifact/ref/events/node state；远端 `runDir` 和 token 不写入 workspace 或默认 CLI 输出。
+- Phase 11 新增 `internal/localworkspace/hybrid_ecommerce.go`、`opsc ecommerce import-template` 和 `opsc ecommerce create-run`：通过 profile/channel `secretRef` 读取 VPS PDD template，写入本地 hybrid template metadata；CLI 可基于已导入 hybrid template 创建 pending local run、template snapshot、pending node state 和 `run.waiting_for_executor` event，且不调用 VPS API；executor 遇到 `hybridEcommerce.backend=vps_pdd` 会创建远端 run、轮询 overview/product-detail、下载 image/video/key artifact 并写回 local canonical artifact/ref/events/node state；远端 `runDir`、输入文件路径和 token 不写入 workspace 或默认 CLI 输出。
 - Phase 8 新增稳定化验证：`opsc serve` state/session/auth/redaction、CLI `serve` 输出脱敏、AI proxy `secretRef` 与浏览器 header 隔离、MCP stdio 工具面冻结和诊断/plan/index rebuild smoke、本地模板草稿 run -> canonical artifact -> run artifact ref happy path；同步 README、features、contract、pending-test、todo、CHANGELOG、项目记忆和中央 Wiki。
 - 已和用户拍板 local-first 数据分离基线：私有模板、run、artifact、个人素材、个人 prompt、本地项目路径和本地日志默认本地；云端只保留账号/授权/计费、公共模板、公共素材和商用 profile 能力。
 - 已确认默认 workspace 为 `~/OpsCanvas`，支持多 workspace；项目文件只保存外部路径引用，不复制进 workspace；生成 artifact 复制进 workspace；secrets 不写普通 JSON；`opsc serve` 使用本地随机 bearer token 或 browser session。
@@ -96,6 +96,8 @@ Phase 11 hybrid ecommerce backend MVP 已接到 `opsc executor`：local workspac
 - 当前本机没有 `go` / `gofmt`，Go 格式化需通过 Docker 或 VPS 环境执行。
 - fact：VPS 上本项目部署目录为 `/opt/ops-canvas-console`，compose 文件为 `docker-compose.pdd-console.yml`，容器名为 `pdd-run-console`。
 - fact：VPS `0.0.0.0:443` 当前监听进程是 `sshd`；应用容器内/host network 暴露的服务监听在 `127.0.0.1:18080` API 和 `127.0.0.1:13000` Next。
+- fact：当前用户给定的 Phase 11 目标 VPS 是 `92.9.225.98`；本机直连 smoke 仍受阻：SSH `-p 443` 在 banner exchange 阶段超时，SSH `-p 22` 在 key exchange 阶段被关闭，直接访问 `http://92.9.225.98:18080/api/health` 返回 empty reply 或超时，`http/https://92.9.225.98/api/health` 也超时。
+- fact：当前本机未设置 `OPSC_VPS_ADMIN_TOKEN`、`OPSC_HYBRID_VPS_TOKEN`、`PDD_ADMIN_TOKEN` 或远端 template id env，因此无法完成真实 VPS 导入/启动 smoke。
 - fact：截至提交 `2923795`，此前大量工作区改动已被提交并推送到 `origin/main`。
 
 ## Files Or Areas To Avoid
@@ -110,13 +112,13 @@ Phase 11 hybrid ecommerce backend MVP 已接到 `opsc executor`：local workspac
 
 ## Next Recommended Steps
 
-- 下一阶段：优先做真实 VPS admin credential + 已确认 template id 的 hybrid ecommerce smoke、Web UI 一条 local run -> executor -> artifact 预览浏览器回归，以及远端事件增量同步；不要先扩大 MCP 写面或迁移旧 VPS run 历史。
+- 下一阶段：优先做可达 VPS API + 真实 admin credential + 已确认 template id 的 hybrid ecommerce smoke，命令链路为 `import-template -> create-run -> executor --run <run_id> -> run status/artifact list`；之后补 Web UI 一条 local run -> executor -> artifact 预览浏览器回归，以及远端事件增量同步；不要先扩大 MCP 写面或迁移旧 VPS run 历史。
 - executor 后续要补 `image_edit`、`video_generation`、复杂 loop/guardrail、模板级失败重试语义和更完整的失败恢复策略；继续复用 workspace core、profile `secretRef` 和 canonical artifact/ref 写回路径。
 - `workspace doctor` 下一阶段可增加 index 新鲜度/重建建议；当前只做结构、引用和占位符级检查，不解析真实 secrets 或模型供应商凭据。
 - project path guard 已进入 executor `condition`/`script`/output mapping 最小链路；下一阶段需要专用 adapter 把文章/视频/电商的真实业务目录和脚本约定固化下来。
 - 本地项目引用现在已有 Web UI 入口，executor 已能使用 `proj_<id>`；下一阶段需要在 Web 模板/工作流中补真实项目选择和业务 adapter 配置，而不是让用户手写底层脚本节点。
 - 对真实产物写入类动作继续人工回归：替换图片旧内容不残留、自由比例/锁比例、裁剪确认、多角度生成节点保留、artifact 预览、应用副本后下游重跑。
-- 如后续要求公网 Web 直接通过 `https://96.9.225.98` 访问，需要先单独确认反向代理/域名/端口方案；本轮未修改部署配置或 `.env`。
+- 如后续要求公网 Web 直接通过 `https://92.9.225.98` 访问，需要先单独确认反向代理/域名/端口方案；本轮未修改部署配置或 `.env`。
 
 ## Validation Status
 
@@ -135,9 +137,9 @@ Phase 11 hybrid ecommerce backend MVP 已接到 `opsc executor`：local workspac
 - passed：Phase 10 已运行 Docker `go test ./internal/localworkspace ./cmd/opsc`，覆盖 project-aware executor 的 condition/script/retry/output mapping、capability/path guard、root/secret 脱敏和既有 serve/MCP/executor 回归。
 - passed：Phase 10 已运行 `python -m py_compile tools/local_workspace_browser_smoke.py`、`cd web && npx tsc --noEmit` 和 `git diff --check`。
 - passed browser smoke：Phase 10 已启动临时 workspace、`opsc serve` 和 Next dev server，运行 `python tools/local_workspace_browser_smoke.py --web-url http://127.0.0.1:3000 --serve-url http://127.0.0.1:17680 --launch-secret <launch.secret>` 通过；结果为 `run_01KSWMHAKRHETP87ME7GSAW9NQ` / `tpl_01KSWMHA9E78AKX86H2TSPR0X2`，覆盖 browser session bootstrap、本地模板/run 创建、状态页 pending -> success 和 artifact modal 预览。Next dev server 因本机旧 Go API 未启动而记录 `/api/settings` 502，不影响 local workspace smoke 结论。
-- passed：Phase 11 hybrid ecommerce 已用 Docker `golang:1.25-alpine` 执行 `/usr/local/go/bin/gofmt -w cmd/opsc/main.go cmd/opsc/main_test.go internal/localworkspace/executor.go internal/localworkspace/executor_test.go internal/localworkspace/hybrid_ecommerce.go`。
-- passed：Phase 11 已运行 Docker `/usr/local/go/bin/go test ./internal/localworkspace ./cmd/opsc`，覆盖 `opsc ecommerce import-template` CLI 脱敏、hybrid template import、profile/channel `secretRef`、远端 run start/status/artifact sync、workspace 不泄露 token 或远端 runDir、success run 重跑不重复同步。
-- partial VPS smoke：通过 SSH `-p 443` 在 VPS 本机访问 `http://127.0.0.1:18080/api/health` 返回 `ok`，未鉴权访问 `/api/admin/workflows/pdd/templates` 返回“未登录或权限不足”；当前本机没有可用 `OPSC_VPS_ADMIN_TOKEN` / `OPSC_HYBRID_VPS_TOKEN` / `PDD_ADMIN_TOKEN` 和远端 template id env，真实导入/启动 smoke 仍需用户提供 credential 和 template id 后执行。
+- passed：Phase 11 hybrid ecommerce 已用 Docker `golang:1.25-alpine` 执行 `/usr/local/go/bin/gofmt -w cmd/opsc/main.go cmd/opsc/main_test.go internal/localworkspace/executor_test.go internal/localworkspace/hybrid_ecommerce.go`。
+- passed：Phase 11 已运行 Docker `GOPROXY=https://goproxy.cn,direct /usr/local/go/bin/go test ./internal/localworkspace ./cmd/opsc`，覆盖 `opsc ecommerce import-template` CLI 脱敏、`opsc ecommerce create-run` pending run 草稿创建与脱敏、hybrid template import、profile/channel `secretRef`、远端 run start/status/artifact sync、workspace 不泄露 token 或远端 runDir、success run 重跑不重复同步。
+- blocked VPS smoke：目标 VPS `92.9.225.98` 当前从本机不可稳定访问，SSH `-p 443` banner exchange 超时，SSH `-p 22` key exchange 被关闭，直接 API health 访问超时或 empty reply；当前本机没有可用 `OPSC_VPS_ADMIN_TOKEN` / `OPSC_HYBRID_VPS_TOKEN` / `PDD_ADMIN_TOKEN` 和远端 template id env，真实导入/启动 smoke 仍需用户提供可达 API、credential 和 template id 后执行。
 - passed：Phase 0 文档变更已运行 `git diff --check`，diff 范围只包含 Markdown/Mermaid 文档。
 - passed：中央 Wiki 已运行 `lint_wiki.sh`、`reindex_qmd.sh llm-wiki` 和 `qmd embed`。
 - passed：Phase 1 已用 Docker `golang:1.25-alpine` 执行 `gofmt -w internal/localworkspace cmd/opsc`。

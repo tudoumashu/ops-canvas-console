@@ -31,6 +31,7 @@ type cliOptions struct {
 	ProfileID        string
 	ChannelID        string
 	SecretEnv        string
+	InputFile        string
 	Command          []string
 }
 
@@ -166,6 +167,8 @@ func runEcommerceCommand(ctx context.Context, opts cliOptions, stdout io.Writer,
 	switch opts.Command[1] {
 	case "import-template":
 		return runEcommerceImportTemplate(ctx, opts, stdout, stderr)
+	case "create-run":
+		return runEcommerceCreateRun(ctx, opts, stdout, stderr)
 	default:
 		return writeError(stderr, opts.JSON, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "unknown ecommerce subcommand: "+opts.Command[1], 1, nil))
 	}
@@ -196,6 +199,59 @@ func runEcommerceImportTemplate(ctx context.Context, opts cliOptions, stdout io.
 		fmt.Fprintf(stderr, "warning: %s\n", warning)
 	}
 	return 0
+}
+
+func runEcommerceCreateRun(ctx context.Context, opts cliOptions, stdout io.Writer, stderr io.Writer) int {
+	if len(opts.Command) < 3 {
+		return writeError(stderr, opts.JSON, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "ecommerce create-run requires a local template id", 1, nil))
+	}
+	input, err := readEcommerceInputFile(opts.InputFile)
+	if err != nil {
+		return writeError(stderr, opts.JSON, asCLIError(err))
+	}
+	result, err := localworkspace.CreateHybridEcommerceRun(ctx, localworkspace.HybridEcommerceRunOptions{
+		WorkspacePath: opts.Workspace,
+		TemplateID:    opts.Command[2],
+		ProfileID:     opts.ProfileID,
+		ChannelID:     opts.ChannelID,
+		Input:         input,
+	})
+	if err != nil {
+		return writeError(stderr, opts.JSON, asCLIError(err))
+	}
+	if opts.JSON {
+		return writeSuccess(stdout, result, result.Warnings)
+	}
+	fmt.Fprintf(stdout, "Created ecommerce run %s\n", result.Run.ID)
+	fmt.Fprintf(stdout, "Template: %s\n", result.TemplateID)
+	fmt.Fprintf(stdout, "Remote template: %s\n", result.RemoteTemplateID)
+	for _, warning := range result.Warnings {
+		fmt.Fprintf(stderr, "warning: %s\n", warning)
+	}
+	return 0
+}
+
+func readEcommerceInputFile(path string) (map[string]any, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, nil
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "input file cannot be read", 1, nil)
+	}
+	var value any
+	if err := json.Unmarshal(body, &value); err != nil {
+		return nil, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "input file must be valid JSON", 1, nil)
+	}
+	switch typed := value.(type) {
+	case []any:
+		return map[string]any{"inputs": typed}, nil
+	case map[string]any:
+		return typed, nil
+	default:
+		return nil, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "input file must be a JSON object or array", 1, nil)
+	}
 }
 
 func runWorkspaceCommand(opts cliOptions, stdout io.Writer, stderr io.Writer) int {
@@ -783,6 +839,14 @@ func parseArgs(args []string) (cliOptions, error) {
 			opts.SecretEnv = args[i]
 		case strings.HasPrefix(arg, "--secret-env="):
 			opts.SecretEnv = strings.TrimPrefix(arg, "--secret-env=")
+		case arg == "--input-file":
+			i++
+			if i >= len(args) {
+				return opts, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "--input-file requires a value", 1, nil)
+			}
+			opts.InputFile = args[i]
+		case strings.HasPrefix(arg, "--input-file="):
+			opts.InputFile = strings.TrimPrefix(arg, "--input-file=")
 		case strings.HasPrefix(arg, "-"):
 			return opts, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "unknown flag: "+arg, 1, nil)
 		default:

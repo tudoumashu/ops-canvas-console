@@ -405,10 +405,28 @@ func TestHybridEcommerceImportAndExecutorSyncsRemoteRun(t *testing.T) {
 	if !imported.Created || imported.Template.Data.Title != "Confirmed Ecommerce" {
 		t.Fatalf("imported = %#v, want created ecommerce template", imported)
 	}
-	run := writeExecutorRun(t, workspace, imported.Template.ID, profileID, RunStatusPending, map[string]any{
-		"inputs": []map[string]any{{"productTitle": "Mug"}},
-	}, nil)
-	appendWaitingForExecutor(t, workspace, run.ID)
+	draft, err := CreateHybridEcommerceRun(context.Background(), HybridEcommerceRunOptions{
+		WorkspacePath: root,
+		TemplateID:    imported.Template.ID,
+		ProfileID:     profileID,
+		Input: map[string]any{
+			"inputs": []map[string]any{{"productTitle": "Mug"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateHybridEcommerceRun() error = %v", err)
+	}
+	run := draft.Run
+	if run.Data.Status != RunStatusPending || run.Data.Input["productConcurrency"] == nil {
+		t.Fatalf("draft run = %#v, want pending with template defaults", run.Data)
+	}
+	draftEvents, err := ReadRunEvents(workspace, run.ID, 0)
+	if err != nil {
+		t.Fatalf("ReadRunEvents(draft) error = %v", err)
+	}
+	if !runEventTypesContain(draftEvents, "run.waiting_for_executor") {
+		t.Fatalf("draft events missing waiting_for_executor: %#v", draftEvents)
+	}
 
 	result, err := RunExecutorOnce(context.Background(), ExecutorOptions{WorkspacePath: root, RunID: run.ID, HTTPClient: remote.Client()})
 	if err != nil {

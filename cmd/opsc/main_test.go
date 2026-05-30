@@ -426,7 +426,7 @@ func TestEcommerceImportTemplateCommandJSONRedactsSecretAndPath(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		_, _ = io.WriteString(w, `{"code":0,"data":{"id":"remote_tpl","workflowType":"pdd","title":"CLI Ecommerce","spec":{"version":1,"nodes":[],"edges":[],"settings":{}}},"msg":"ok"}`)
+		_, _ = io.WriteString(w, `{"code":0,"data":{"id":"remote_tpl","workflowType":"pdd","title":"CLI Ecommerce","spec":{"version":1,"nodes":[{"id":"stage_generate","title":"Generate","type":"image","operation":"image_generation"}],"edges":[],"settings":{"productConcurrency":1,"maxRetries":0}}},"msg":"ok"}`)
 	}))
 	defer remote.Close()
 	profile, err := localworkspace.NewProfile(workspace, localworkspace.ProfileData{
@@ -468,6 +468,57 @@ func TestEcommerceImportTemplateCommandJSONRedactsSecretAndPath(t *testing.T) {
 		if strings.Contains(stdout.String(), secret) || strings.Contains(stderr.String(), secret) {
 			t.Fatalf("CLI output leaked %q:\nstdout=%s\nstderr=%s", secret, stdout.String(), stderr.String())
 		}
+	}
+	templates, err := localworkspace.ListTemplates(workspace)
+	if err != nil {
+		t.Fatalf("ListTemplates() error = %v", err)
+	}
+	if len(templates) != 1 {
+		t.Fatalf("templates = %#v, want imported template", templates)
+	}
+	inputPath := filepath.Join(t.TempDir(), "hybrid-input.json")
+	if err := os.WriteFile(inputPath, []byte(`{"inputs":[{"productTitle":"Mug"}]}`), 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"ecommerce", "create-run", templates[0].ID, "--workspace", root, "--input-file", inputPath, "--profile", profile.ID, "--channel", "vps", "--json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("ecommerce create-run exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("create-run stderr = %s, want empty", stderr.String())
+	}
+	for _, want := range []string{`"ok": true`, `"remoteTemplateId": "remote_tpl"`, `"status": "pending"`} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("create-run stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	for _, secret := range []string{root, inputPath, "cli-remote-secret"} {
+		if strings.Contains(stdout.String(), secret) || strings.Contains(stderr.String(), secret) {
+			t.Fatalf("create-run output leaked %q:\nstdout=%s\nstderr=%s", secret, stdout.String(), stderr.String())
+		}
+	}
+	runs, err := localworkspace.ListRuns(workspace)
+	if err != nil {
+		t.Fatalf("ListRuns() error = %v", err)
+	}
+	if len(runs) != 1 || runs[0].Data.TemplateID != templates[0].ID || runs[0].Data.Input["productConcurrency"] == nil {
+		t.Fatalf("runs = %#v, want one ecommerce draft with defaults", runs)
+	}
+	events, err := localworkspace.ReadRunEvents(workspace, runs[0].ID, 0)
+	if err != nil {
+		t.Fatalf("ReadRunEvents() error = %v", err)
+	}
+	if len(events) < 2 || events[len(events)-1].Type != "run.waiting_for_executor" {
+		t.Fatalf("events = %#v, want waiting_for_executor", events)
+	}
+	states, err := localworkspace.ListRunNodeStates(workspace, runs[0].ID)
+	if err != nil {
+		t.Fatalf("ListRunNodeStates() error = %v", err)
+	}
+	if len(states) != 1 || states[0].Data.NodeID != "stage_generate" || states[0].Data.Status != localworkspace.RunStatusPending {
+		t.Fatalf("node states = %#v, want pending template node", states)
 	}
 }
 

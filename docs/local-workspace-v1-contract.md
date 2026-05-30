@@ -776,6 +776,7 @@ opsc prompt list --json
 opsc serve
 opsc executor
 opsc ecommerce import-template
+opsc ecommerce create-run <tpl_id>
 ```
 
 通用规则：
@@ -952,10 +953,11 @@ opsc prompt list --workspace ./tmp/ws --json
 opsc serve --workspace ./tmp/ws --port 0 --origin http://127.0.0.1:3000 --json
 opsc executor --workspace ./tmp/ws --json
 opsc ecommerce import-template --workspace ./tmp/ws --remote-template <template_id> --profile <profile_id> --channel <channel_id> --json
+opsc ecommerce create-run tpl_01HZZZZZZZZZZZZZZZZZZZZZZZ --workspace ./tmp/ws --input-file ./tmp/hybrid-input.json --json
 opsc mcp --workspace ./tmp/ws
 ```
 
-除 `run events` 外，这些命令使用同一个 success JSON envelope，默认不输出 workspace 绝对路径，也不读取或打印 secrets。`project list` 返回 `hasRootPath` 和 opaque `rootFingerprint`，不返回 `rootPath`；`profile list` 不返回 `secretRef`；`workspace export plan` 只返回相对路径和排除原因；`workspace gc plan` 只做 dry-run，返回待人工 review 的相对路径 candidates，不删除文件。`run events` 为 agent/streaming 友好的 JSONL 输出，每行一个 event envelope，不再额外包一层 success envelope；`--follow` 会先输出已有事件，再轮询追加事件直到调用方中断。`run status` 返回 run summary、node state summaries 和 `latestEventSequence`。`artifact list --run` 通过 index 查询 run refs，并返回对应 canonical `artifacts/art_<ULID>/artifact.json` 的摘要和 run 内 ref metadata。`opsc executor` 是 run-once 本地执行入口，可用 `--run <run_id>` 限定单个 run；workflow 失败会写入 run/node error 并在命令结果中返回该 run 状态，基础设施错误才作为 CLI 非 0 失败。`opsc ecommerce import-template` 只导入一个已确认远端 PDD template 的 local canonical copy，VPS admin credential 必须来自 profile/channel `secretRef` 或显式 env `secretRef`，CLI 输出不得包含 token、workspace 绝对路径或远端 run dir。
+除 `run events` 外，这些命令使用同一个 success JSON envelope，默认不输出 workspace 绝对路径，也不读取或打印 secrets。`project list` 返回 `hasRootPath` 和 opaque `rootFingerprint`，不返回 `rootPath`；`profile list` 不返回 `secretRef`；`workspace export plan` 只返回相对路径和排除原因；`workspace gc plan` 只做 dry-run，返回待人工 review 的相对路径 candidates，不删除文件。`run events` 为 agent/streaming 友好的 JSONL 输出，每行一个 event envelope，不再额外包一层 success envelope；`--follow` 会先输出已有事件，再轮询追加事件直到调用方中断。`run status` 返回 run summary、node state summaries 和 `latestEventSequence`。`artifact list --run` 通过 index 查询 run refs，并返回对应 canonical `artifacts/art_<ULID>/artifact.json` 的摘要和 run 内 ref metadata。`opsc executor` 是 run-once 本地执行入口，可用 `--run <run_id>` 限定单个 run；workflow 失败会写入 run/node error 并在命令结果中返回该 run 状态，基础设施错误才作为 CLI 非 0 失败。`opsc ecommerce import-template` 只导入一个已确认远端 PDD template 的 local canonical copy，VPS admin credential 必须来自 profile/channel `secretRef` 或显式 env `secretRef`，CLI 输出不得包含 token、workspace 绝对路径或远端 run dir。`opsc ecommerce create-run` 只基于已导入的 local hybrid template 创建 pending local run、template snapshot、pending node states 和 `run.waiting_for_executor` event；`--input-file` 可是 JSON object 或 bare inputs array，命令不会调用 VPS API，真实远端执行仍由 `opsc executor --run <run_id>` 完成。
 
 ## `opsc serve` Contract
 

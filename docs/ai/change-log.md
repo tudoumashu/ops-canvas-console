@@ -1,5 +1,15 @@
 # AI 项目记忆变更记录
 
+## 2026-05-31 | Hybrid Ecommerce headless local run draft | commit: pending
+
+- 目标：补齐 Phase 11 hybrid ecommerce 的 headless 本地 run 创建路径，让 CLI 可以在不经过浏览器、不直接调用 VPS API 的情况下，从已导入模板创建 canonical local run 草稿。
+- 变更：新增 `CreateHybridEcommerceRun`，基于已导入的 `metadata.hybridEcommerce.backend=vps_pdd` template 创建 pending `runs/<run_id>/run.json`、template snapshot、pending node state 和 `run.waiting_for_executor` event；新增 `opsc ecommerce create-run <tpl_id> --input-file <json> --json`，输入文件支持 JSON object 或 bare inputs array，模板默认 inputs/productConcurrency/maxRetries 会合并到 run input，CLI 输出不包含 workspace 绝对路径、输入文件路径或 secret。
+- 原因：用户后续需要用 CLI/MCP/agent 驱动同一套 local-first 工作流；导入模板和 executor 中间需要一个可脚本化、可测试的 canonical run draft 创建入口，但不能让浏览器或 VPS run dir 成为事实源。
+- 验证：已用 Docker `golang:1.25-alpine` 执行 `/usr/local/go/bin/gofmt -w cmd/opsc/main.go cmd/opsc/main_test.go internal/localworkspace/executor_test.go internal/localworkspace/hybrid_ecommerce.go`；已运行 `GOPROXY=https://goproxy.cn,direct /usr/local/go/bin/go test ./internal/localworkspace ./cmd/opsc`，覆盖 CLI create-run 脱敏、template defaults 合并、waiting event、pending node state 和 hybrid executor 继续从该 run 执行。
+- 影响：只增加 local workspace hybrid run draft 的 core/CLI/test/doc；不改旧 `main.go`、router、service、repository、DB 行为，不改 Web UI 语义，不迁移现有 PDD/VPS run，不扩大 MCP mutation surface。
+- 风险：真实 VPS smoke 当前仍未完成；目标 VPS `92.9.225.98` 通过 SSH `-p 443` banner exchange 超时、SSH `-p 22` key exchange 被关闭，直接 health 访问超时或 empty reply，且本机未设置 `OPSC_VPS_ADMIN_TOKEN` / `OPSC_HYBRID_VPS_TOKEN` / `PDD_ADMIN_TOKEN` 与远端 template id env。
+- 后续：拿到可达 VPS API、admin credential 和确认 template id 后，按 `import-template -> create-run -> executor --run <run_id> -> run status/artifact list` 做真实 smoke；之后再补 Web UI 一条 hybrid run 浏览器回归和远端事件增量同步。
+
 ## 2026-05-30 | Hybrid Ecommerce VPS backend MVP | commit: pending
 
 - 目标：在不迁移现有 PDD/VPS run、不把 VPS run dir 当事实源、不扩大 MCP 写面的前提下，先接通一个已确认电商模板的 local workspace -> VPS API 真实执行路径。
