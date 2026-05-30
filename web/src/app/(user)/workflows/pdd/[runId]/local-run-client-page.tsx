@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { App, Button, Card, Empty, Modal, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -31,20 +31,28 @@ export default function LocalRunClientPage({ runId }: { runId: string }) {
         enabled: connected,
         refetchInterval: (query) => {
             const status = query.state.data?.run.status;
-            return status === "running" ? 3000 : false;
+            return shouldPollLocalRun(status) ? 3000 : false;
         },
     });
+    const runStatus = statusQuery.data?.run.status;
     const eventsQuery = useQuery({
         queryKey: ["local-run-events", baseUrl, runId],
         queryFn: () => fetchLocalRunEvents(baseUrl, runId),
         enabled: connected,
-        refetchInterval: statusQuery.data?.run.status === "running" ? 3000 : false,
+        refetchInterval: shouldPollLocalRun(runStatus) ? 3000 : false,
     });
     const artifactsQuery = useQuery({
         queryKey: ["local-run-artifacts", baseUrl, runId],
         queryFn: () => listLocalRunArtifacts(baseUrl, runId),
         enabled: connected,
+        refetchInterval: shouldPollLocalRun(runStatus) ? 3000 : false,
     });
+
+    useEffect(() => {
+        if (!runStatus || shouldPollLocalRun(runStatus)) return;
+        void eventsQuery.refetch();
+        void artifactsQuery.refetch();
+    }, [runStatus, eventsQuery.refetch, artifactsQuery.refetch]);
 
     const openArtifact = useCallback(
         async (item: LocalRunArtifactSummary) => {
@@ -180,6 +188,10 @@ export default function LocalRunClientPage({ runId }: { runId: string }) {
             </Modal>
         </main>
     );
+}
+
+function shouldPollLocalRun(status?: string) {
+    return status === "pending" || status === "running";
 }
 
 function StatusTag({ status }: { status: string }) {
