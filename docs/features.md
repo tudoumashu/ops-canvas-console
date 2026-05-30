@@ -7,7 +7,8 @@
 - 支持创建多个画布项目。
 - 支持项目重命名、删除、批量选择和批量删除。
 - 支持单个画布项目导出为 JSON，也支持从 JSON 导入画布。
-- 画布项目保存在浏览器本地，登录账号后暂不会自动同步到服务器。
+- 连接 local workspace 后，画布项目写入 `canvas-projects/<canvas_id>/canvas-project.json`，图片/视频节点和助手媒体写入同目录 `files/` 并通过 `workspaceFileKey` 引用。
+- 浏览器存储只作为展示缓存和上传/导入前的临时桥接，不再作为画布项目长期事实源；旧浏览器测试数据不迁移。
 
 ## 电商工作流
 
@@ -63,7 +64,7 @@
 
 ## AI 生成
 
-项目支持两种模型调用方式：默认通过后端 `/api/v1/*` 代理到管理员配置的模型渠道；允许本地直连时，用户也可以在浏览器中配置自己的 OpenAI 兼容接口。
+项目支持两种模型调用方式：默认通过后端 `/api/v1/*` 代理到管理员配置的模型渠道；连接 local workspace 后，用户可在本地 profile 中配置 OpenAI 兼容渠道，并通过 `opsc serve` 的 `/api/local/ai/v1/*` 本机代理调用。
 
 - `/v1/images/generations`：文生图。
 - `/v1/images/edits`：图生图/参考图编辑。
@@ -72,6 +73,8 @@
 - `/v1/models`：读取模型列表。
 
 管理员模型渠道支持 `openai` 和 `flow2api` 协议。`flow2api` 渠道通过 `/chat/completions` 返回媒体链接，后端会适配为现有图片和视频接口，工作台和模板工作流不需要关心上游差异。
+
+local workspace 模式下，模型渠道写入 `profiles/<profile_id>/profile.json`，只保存 Base URL、模型列表、默认模型和 `secretRef`；真实 API Key 通过环境变量或本机 secret 文件解析，不写入浏览器长期存储，也不由浏览器直接转发给供应商。
 
 可配置项：
 
@@ -101,9 +104,22 @@
 - 把助手生成的图片插入画布。
 - 折叠和展开助手面板。
 
+## Local Workspace v1
+
+Local Workspace v1 面向个人/本机自用场景，是私有数据的本地事实源。
+
+- `opsc workspace init/info/doctor` 支持初始化、机器可读信息和结构诊断。
+- `opsc serve` 默认监听 `127.0.0.1`，使用 workspace 外 XDG state 保存 runtime metadata、`bearer.token`、一次性 `launch.secret`、HttpOnly session、port/pid 和 lock 文件。
+- Web UI 通过 `opsc serve` 访问本地 profiles、projects、assets、prompts、canvas projects、workbench logs、templates、runs 和 artifacts；浏览器不直接写 `~/OpsCanvas`。
+- 写操作走 workspace core/service、atomic write、lock、revision 检查、path escape 防护和默认脱敏输出。
+- canonical artifact metadata 写在 `artifacts/<art_id>/artifact.json`，run 目录只保存 artifact ref，避免同一产物 metadata 双写漂移。
+- `index.sqlite` 是派生索引，可通过扫描 canonical JSON/JSONL/files 重建。
+- `opsc mcp` 是 stdio 薄封装，复用 CLI/core/active `opsc serve`；当前不提供独立 repository、独立 writer 或新的对象 schema。
+- 当前不会迁移旧浏览器测试数据，也不会迁移现有 PDD/VPS run。
+
 ## 提示词中心
 
-前台提示词中心分为“提示词库”和“我的提示词”两个分区。提示词库保存服务器公共提示词，我的提示词保存在浏览器本地。
+前台提示词中心分为“提示词库”和“我的提示词”两个分区。提示词库保存服务器公共提示词；连接 local workspace 后，“我的提示词”写入 `prompts/<prompt_id>/prompt.json` 和 `content.md`。
 
 提示词中心支持：
 
@@ -130,7 +146,7 @@
 
 “素材中心”分为“我的素材”和“素材库”两个分区。
 
-“我的素材”保存在浏览器本地，支持：
+连接 local workspace 后，“我的素材”保存在 `assets/<asset_id>/asset.json` 和 `files/`，支持：
 
 - 新增文本素材和图片素材。
 - 编辑素材标题、封面、标签、用途、来源、备注和内容。
@@ -183,7 +199,10 @@
 
 ## 当前限制
 
-- 画布项目和“我的素材”目前只保存在浏览器本地，不会随账号同步；“素材库”保存在服务器。
-- AI API Key 目前保存在浏览器本地，并由浏览器直接请求配置的 OpenAI 兼容接口。
+- local workspace 当前仍是本机自用能力，不提供云同步；“素材库”、公共提示词和管理员配置仍保存在服务器/DB。
+- 浏览器旧 localforage/IndexedDB 测试数据不迁移；连接 local workspace 后浏览器只保留 cache、temporary state 和展示层补水。
+- local run 目前可创建草稿、记录节点状态、事件和 artifact ref，但真实 local workflow executor 尚未接入；模型节点不会自动执行。
+- 现有 PDD/VPS run 不迁移，VPS run 查看和本地 workspace run 是两条边界清晰的路径。
+- MCP 当前是薄封装，主要暴露只读/诊断/dry-run 和通过 active `opsc serve` 重建索引；不暴露批量对象写入和执行器能力。
 - 服务器素材库目前主要保存 URL 或文本，暂未提供文件上传接口。
 - 画布更适合桌面端使用，移动端触控体验还未系统完善。

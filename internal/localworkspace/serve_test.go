@@ -85,6 +85,7 @@ func TestServeRuntimeAuthCORSAndWorkspaceAPI(t *testing.T) {
 	if !strings.HasPrefix(stateDir, stateRoot) {
 		t.Fatalf("stateDir = %s, want under %s", stateDir, stateRoot)
 	}
+	assertPrivateDir(t, stateDir)
 	token := readServeToken(t, workspace)
 	if token == "" {
 		t.Fatal("serve token is empty")
@@ -114,6 +115,13 @@ func TestServeRuntimeAuthCORSAndWorkspaceAPI(t *testing.T) {
 	if status != http.StatusUnauthorized || !strings.Contains(body, `"code":1`) {
 		t.Fatalf("unauthorized status=%d body=%s", status, body)
 	}
+	assertNoServeLeak(t, body, root, token, workspace.Document.ID)
+
+	status, body = serveRequest(t, http.MethodGet, baseURL+"/api/local/runtime", "wrong-token", "", nil, nil)
+	if status != http.StatusUnauthorized || !strings.Contains(body, `"code":1`) {
+		t.Fatalf("bad bearer status=%d body=%s", status, body)
+	}
+	assertNoServeLeak(t, body, root, token, workspace.Document.ID)
 
 	req, err := http.NewRequest(http.MethodOptions, baseURL+"/api/local/workspace", nil)
 	if err != nil {
@@ -155,10 +163,15 @@ func TestServeRuntimeAuthCORSAndWorkspaceAPI(t *testing.T) {
 	if status != http.StatusOK || !strings.Contains(body, `"code":0`) || cookie == nil || !cookie.HttpOnly {
 		t.Fatalf("bootstrap status=%d body=%s cookie=%#v", status, body, cookie)
 	}
+	if _, err := os.Stat(filepath.Join(stateDir, "launch.secret")); !os.IsNotExist(err) {
+		t.Fatalf("launch.secret still exists after bootstrap: %v", err)
+	}
+	assertPrivateFile(t, filepath.Join(stateDir, "sessions.json"))
 	status, body, _ = bootstrapSession(t, baseURL, launchSecret)
 	if status != http.StatusUnauthorized || !strings.Contains(body, `"code":1`) {
 		t.Fatalf("second bootstrap status=%d body=%s", status, body)
 	}
+	assertNoServeLeak(t, body, root, token, launchSecret, workspace.Document.ID)
 
 	status, body = serveRequest(t, http.MethodGet, baseURL+"/api/local/workspace", "", "http://127.0.0.1:3000", nil, cookie)
 	if status != http.StatusOK || !strings.Contains(body, `"code":0`) || !strings.Contains(body, `"active":true`) {
@@ -167,6 +180,13 @@ func TestServeRuntimeAuthCORSAndWorkspaceAPI(t *testing.T) {
 	if strings.Contains(body, root) || strings.Contains(body, token) {
 		t.Fatalf("workspace info leaked path or token: %s", body)
 	}
+	assertNoServeLeak(t, body, root, token, launchSecret)
+
+	status, body = serveRequest(t, http.MethodGet, baseURL+"/api/local/runtime", "", "http://127.0.0.1:3000", nil, cookie)
+	if status != http.StatusOK || !strings.Contains(body, `"tokenFile":"bearer.token"`) || !strings.Contains(body, `"launchSecretFile":"launch.secret"`) {
+		t.Fatalf("runtime with cookie status=%d body=%s", status, body)
+	}
+	assertNoServeLeak(t, body, root, token, launchSecret)
 
 	status, body = serveRequest(t, http.MethodGet, baseURL+"/api/local/templates", token, "", nil, nil)
 	if status != http.StatusOK || !strings.Contains(body, template.ID) || !strings.Contains(body, "Serve Template") {
@@ -194,6 +214,99 @@ func TestServeRuntimeAuthCORSAndWorkspaceAPI(t *testing.T) {
 	}
 	if info := workspace.Info(false); info.Runtime.Active {
 		t.Fatalf("workspace runtime active after shutdown: %#v", info.Runtime)
+	}
+}
+
+func TestServeLocalTemplateRunDraftArtifactRefHappyPath(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
+	root := filepath.Join(t.TempDir(), "workspace")
+	result, err := Init(InitOptions{Path: root, Name: "Local Run Draft Workspace"})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	workspace := result.Workspace
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := make(chan ServeRuntimeInfo, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Serve(ctx, ServeOptions{
+			WorkspacePath: root,
+			Port:          0,
+			Ready: func(runtime ServeRuntimeInfo) error {
+				ready <- runtime
+				return nil
+			},
+		})
+	}()
+	runtime := waitServeReady(t, ready)
+	token := readServeToken(t, workspace)
+
+	assetData := `{"type":"image","title":"Fixed Material","mediaType":"image","privacy":"private","metadata":{"width":1,"height":1}}`
+	status, body := serveMultipartRequest(t, runtime.BaseURL+"/api/local/assets/import", token, assetData, "original", "", "fixed.png", "image/png", []byte("fixed-asset-png"))
+	if status != http.StatusOK || !strings.Contains(body, `"kind":"asset"`) {
+		t.Fatalf("asset import status=%d body=%s", status, body)
+	}
+	assetID := jsonPathString(t, body, "data.id")
+	status, body = serveRequest(t, http.MethodGet, runtime.BaseURL+"/api/local/assets/"+assetID+"/files/original", token, "", nil, nil)
+	if status != http.StatusOK || body != "fixed-asset-png" {
+		t.Fatalf("asset file status=%d body=%q", status, body)
+	}
+
+	templateBody := `{"data":{"title":"Fixed Material Template","workflowType":"pdd","version":1,"nodes":[{"id":"material_1","type":"material_lookup","extra":{"assetMode":"fixed","assetId":` + strconvQuote(assetID) + `}},{"id":"image_1","type":"image_generation"}],"edges":[{"source":"material_1","target":"image_1"}],"settings":{"maxRetries":0}}}`
+	status, body = serveRequest(t, http.MethodPost, runtime.BaseURL+"/api/local/templates", token, "", strings.NewReader(templateBody), nil)
+	if status != http.StatusOK || !strings.Contains(body, `"title":"Fixed Material Template"`) {
+		t.Fatalf("template create status=%d body=%s", status, body)
+	}
+	templateID := jsonPathString(t, body, "data.id")
+
+	runBody := `{"data":{"templateId":` + strconvQuote(templateID) + `,"status":"pending","input":{"items":[{"theme":"fixed material"}]},"metadata":{"executor":"not_connected","source":"web.local_template"}}}`
+	status, body = serveRequest(t, http.MethodPost, runtime.BaseURL+"/api/local/runs", token, "", strings.NewReader(runBody), nil)
+	if status != http.StatusOK || !strings.Contains(body, `"kind":"run"`) || !strings.Contains(body, `"status":"pending"`) {
+		t.Fatalf("run create status=%d body=%s", status, body)
+	}
+	runID := jsonPathString(t, body, "data.id")
+
+	artifactData := `{"type":"image","title":"Fixed Material Artifact","privacy":"private","source":{"type":"local_asset","assetId":` + strconvQuote(assetID) + `,"templateId":` + strconvQuote(templateID) + `,"runId":` + strconvQuote(runID) + `,"nodeId":"material_1"}}`
+	status, body = serveMultipartRequest(t, runtime.BaseURL+"/api/local/artifacts/import", token, artifactData, "original", "", "fixed.png", "image/png", []byte("fixed-asset-png"))
+	if status != http.StatusOK || !strings.Contains(body, `"kind":"artifact"`) || !strings.Contains(body, `"original":"files/original.png"`) {
+		t.Fatalf("artifact import status=%d body=%s", status, body)
+	}
+	artifactID := jsonPathString(t, body, "data.id")
+
+	refBody := `{"data":{"artifactId":` + strconvQuote(artifactID) + `,"role":"input","nodeId":"material_1","slot":"material","order":0,"metadata":{"sourceAssetId":` + strconvQuote(assetID) + `}}}`
+	status, body = serveRequest(t, http.MethodPost, runtime.BaseURL+"/api/local/runs/"+runID+"/artifacts", token, "", strings.NewReader(refBody), nil)
+	if status != http.StatusOK || !strings.Contains(body, `"kind":"run_artifact_ref"`) {
+		t.Fatalf("run artifact ref status=%d body=%s", status, body)
+	}
+	nodeBody := `{"data":{"nodeId":"material_1","status":"success","output":{"assetId":` + strconvQuote(assetID) + `,"artifactId":` + strconvQuote(artifactID) + `}}}`
+	status, body = serveRequest(t, http.MethodPost, runtime.BaseURL+"/api/local/runs/"+runID+"/nodes/material_1", token, "", strings.NewReader(nodeBody), nil)
+	if status != http.StatusOK || !strings.Contains(body, `"nodeId":"material_1"`) || !strings.Contains(body, `"status":"success"`) {
+		t.Fatalf("run node state status=%d body=%s", status, body)
+	}
+	eventBody := `{"event":{"type":"run.waiting_for_executor","level":"info","actor":{"type":"web","id":"ops-canvas-web"},"message":"Local run draft created","data":{"mode":"local"}}}`
+	status, body = serveRequest(t, http.MethodPost, runtime.BaseURL+"/api/local/runs/"+runID+"/events", token, "", strings.NewReader(eventBody), nil)
+	if status != http.StatusOK || !strings.Contains(body, `"type":"run.waiting_for_executor"`) {
+		t.Fatalf("run event status=%d body=%s", status, body)
+	}
+
+	status, body = serveRequest(t, http.MethodGet, runtime.BaseURL+"/api/local/runs/"+runID+"/status", token, "", nil, nil)
+	if status != http.StatusOK || !strings.Contains(body, `"artifactCount":1`) || !strings.Contains(body, `"nodeId":"material_1"`) || !strings.Contains(body, `"status":"success"`) {
+		t.Fatalf("run status status=%d body=%s", status, body)
+	}
+	assertNoServeLeak(t, body, root, token)
+	status, body = serveRequest(t, http.MethodGet, runtime.BaseURL+"/api/local/runs/"+runID+"/artifacts", token, "", nil, nil)
+	if status != http.StatusOK || !strings.Contains(body, artifactID) || !strings.Contains(body, `"role":"input"`) || !strings.Contains(body, `"slot":"material"`) {
+		t.Fatalf("run artifacts status=%d body=%s", status, body)
+	}
+	status, body = serveRequest(t, http.MethodGet, runtime.BaseURL+"/api/local/artifacts/"+artifactID+"/files/original", token, "", nil, nil)
+	if status != http.StatusOK || body != "fixed-asset-png" {
+		t.Fatalf("artifact file status=%d body=%q", status, body)
+	}
+
+	cancel()
+	if err := waitServeDone(t, errCh); err != nil {
+		t.Fatalf("Serve() error after cancel = %v", err)
 	}
 }
 
@@ -392,9 +505,15 @@ func TestServeAIProxyUsesProfileSecretRef(t *testing.T) {
 	t.Setenv("OPSC_TEST_AI_KEY", "provider-secret")
 	var providerAuth string
 	var providerPath string
+	var providerCookie string
+	var providerProfileHeader string
+	var providerLocalToken string
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		providerAuth = r.Header.Get("Authorization")
 		providerPath = r.URL.RequestURI()
+		providerCookie = r.Header.Get("Cookie")
+		providerProfileHeader = r.Header.Get("X-Opsc-Profile-Id")
+		providerLocalToken = r.Header.Get("X-Local-Token")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"data":[{"id":"gpt-test"}]}`)
 	}))
@@ -433,8 +552,9 @@ func TestServeAIProxyUsesProfileSecretRef(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- Serve(ctx, ServeOptions{
-			WorkspacePath: root,
-			Port:          0,
+			WorkspacePath:  root,
+			Port:           0,
+			AllowedOrigins: []string{"http://127.0.0.1:3000"},
 			Ready: func(runtime ServeRuntimeInfo) error {
 				ready <- runtime
 				return nil
@@ -454,6 +574,53 @@ func TestServeAIProxyUsesProfileSecretRef(t *testing.T) {
 	if providerPath != "/v1/models?internal=1" {
 		t.Fatalf("provider path = %q, want /v1/models?internal=1", providerPath)
 	}
+	if providerCookie != "" || providerProfileHeader != "" || providerLocalToken != "" {
+		t.Fatalf("browser/local headers reached provider cookie=%q profile=%q local=%q", providerCookie, providerProfileHeader, providerLocalToken)
+	}
+
+	launchSecret := readLaunchSecret(t, workspace)
+	status, body, cookie := bootstrapSession(t, runtime.BaseURL, launchSecret)
+	if status != http.StatusOK || cookie == nil {
+		t.Fatalf("bootstrap status=%d body=%s cookie=%#v", status, body, cookie)
+	}
+	providerAuth = ""
+	providerCookie = ""
+	providerProfileHeader = ""
+	providerLocalToken = ""
+	req, err := http.NewRequest(http.MethodGet, runtime.BaseURL+"/api/local/ai/v1/models?profileId="+profile.ID+"&internal=1", nil)
+	if err != nil {
+		t.Fatalf("new browser ai proxy request: %v", err)
+	}
+	req.Header.Set("Origin", "http://127.0.0.1:3000")
+	req.Header.Set("Authorization", "Bearer browser-should-not-reach-provider")
+	req.Header.Set("X-Opsc-Profile-Id", profile.ID)
+	req.Header.Set("X-Local-Token", token)
+	req.AddCookie(cookie)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("browser ai proxy request: %v", err)
+	}
+	browserBody, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatalf("read browser ai proxy body: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(browserBody), "gpt-test") {
+		t.Fatalf("browser ai proxy status=%d body=%s", resp.StatusCode, browserBody)
+	}
+	if providerAuth != "Bearer provider-secret" {
+		t.Fatalf("provider auth after browser request = %q, want profile secret", providerAuth)
+	}
+	if providerCookie != "" || providerProfileHeader != "" || providerLocalToken != "" {
+		t.Fatalf("browser/local headers reached provider cookie=%q profile=%q local=%q", providerCookie, providerProfileHeader, providerLocalToken)
+	}
+
+	t.Setenv("OPSC_TEST_AI_KEY", "")
+	status, body = serveRequest(t, http.MethodGet, runtime.BaseURL+"/api/local/ai/v1/models?profileId="+profile.ID, token, "", nil, nil)
+	if status != http.StatusUnprocessableEntity || !strings.Contains(body, `"code":1`) || !strings.Contains(body, "ai channel env secret is not configured") {
+		t.Fatalf("missing env secret status=%d body=%s", status, body)
+	}
+	assertNoServeLeak(t, body, root, token, launchSecret, "provider-secret", "OPSC_TEST_AI_KEY")
 
 	cancel()
 	if err := waitServeDone(t, errCh); err != nil {
@@ -587,6 +754,27 @@ func assertPrivateFile(t *testing.T, path string) {
 		t.Fatalf("stat %s: %v", path, err)
 	} else if stat.Mode().Perm() != 0o600 {
 		t.Fatalf("%s mode = %o, want 0600", path, stat.Mode().Perm())
+	}
+}
+
+func assertPrivateDir(t *testing.T, path string) {
+	t.Helper()
+	if stat, err := os.Stat(path); err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	} else if !stat.IsDir() || stat.Mode().Perm() != 0o700 {
+		t.Fatalf("%s mode = %o dir=%v, want private dir 0700", path, stat.Mode().Perm(), stat.IsDir())
+	}
+}
+
+func assertNoServeLeak(t *testing.T, body string, secrets ...string) {
+	t.Helper()
+	for _, secret := range secrets {
+		if strings.TrimSpace(secret) == "" {
+			continue
+		}
+		if strings.Contains(body, secret) {
+			t.Fatalf("serve response leaked %q in body: %s", secret, body)
+		}
 	}
 }
 

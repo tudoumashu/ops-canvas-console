@@ -138,7 +138,7 @@ Web UI 本地工作区连接：
 1. 启动 `go run ./cmd/opsc serve --workspace ~/OpsCanvas --port 17680 --origin <当前 Web origin>`。
 2. 在顶部导航点击本地工作区按钮，服务地址使用与 Web origin 同一 loopback host，例如 Web 是 `http://localhost:3000` 时优先填 `http://localhost:17680`，避免 `SameSite=Lax` cookie 因 `localhost` / `127.0.0.1` 混用不发送。
 3. 从 runtime/state 目录读取本次启动的 `launch.secret`，输入后建立 browser session。不要把 `bearer.token` 填到浏览器或写进 `localStorage`。
-4. `我的素材`、`我的提示词`、画布项目库、工作台 text/image/video 生成记录、电商工作流私有模板和工作流入口自定义文件夹通过 `opsc serve` 读写 workspace；图片/视频工作台结果保存成功后从 workbench-log 文件端点回显；浏览器 localforage/localStorage 只保留 `opsc:asset_store_cache:v1`、`opsc:prompt_store_cache:v1`、`opsc:canvas_store_cache:v1` 展示缓存、loopback `baseUrl` 或生成中/上传中的临时媒体状态。旧 `infinite-canvas:*`、`text_generation_logs`、`image_generation_logs`、`video_generation_logs`、`ops-canvas-workflow-folders` 测试数据不迁移。本地模板当前只支持 CRUD，不启动 PDD/VPS run。
+4. `我的素材`、`我的提示词`、画布项目库、工作台 text/image/video 生成记录、电商工作流私有模板、local run/artifact 基础记录和工作流入口自定义文件夹通过 `opsc serve` 读写 workspace；图片/视频工作台结果保存成功后从 workbench-log 文件端点回显；浏览器 localforage/localStorage 只保留 `opsc:asset_store_cache:v1`、`opsc:prompt_store_cache:v1`、`opsc:canvas_store_cache:v1` 展示缓存、loopback `baseUrl` 或生成中/上传中的临时媒体状态。旧 `infinite-canvas:*`、`text_generation_logs`、`image_generation_logs`、`video_generation_logs`、`ops-canvas-workflow-folders` 测试数据不迁移。本地模板当前可创建 pending local run 草稿并 materialize 固定本地素材 artifact ref，但不启动真实 PDD/VPS executor。
 
 ## Test / Typecheck / Build Commands
 
@@ -150,6 +150,18 @@ go test ./...
 
 ```bash
 go test ./internal/localworkspace ./cmd/opsc
+```
+
+Phase 8 local workspace 稳定化目标验证：
+
+```bash
+docker run --rm -e GOPROXY=https://goproxy.cn,direct -v "$PWD":/src -w /src golang:1.25-alpine /usr/local/go/bin/go test ./internal/localworkspace ./cmd/opsc
+```
+
+该目标测试覆盖 `opsc serve` 鉴权/redaction/session、AI proxy `secretRef` 与浏览器 header 隔离、本地模板草稿 run 到 canonical artifact ref happy path，以及 `cmd/opsc` MCP stdio wrapper smoke。Go 文件改动后可用 Docker 执行 `gofmt`，避免本机未安装 Go：
+
+```bash
+docker run --rm -v "$PWD":/src -w /src golang:1.25-alpine /usr/local/go/bin/gofmt -w internal/localworkspace cmd/opsc
 ```
 
 ```bash

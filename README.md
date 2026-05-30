@@ -16,7 +16,8 @@
 - 无限画布：多画布项目、节点拖拽缩放、连线、小地图、撤销重做、导入导出。
 - AI 创作：支持 OpenAI 兼容接口的文生图、图生图、参考图编辑和文本问答。
 - 画布助手：围绕选中节点和上游节点对话、生图，并把结果插回画布。
-- 提示词中心：抓取多个 GitHub 开源项目，按案例整理数百个图片提示词，并支持浏览器本地的“我的提示词”。
+- 提示词中心：抓取多个 GitHub 开源项目，按案例整理数百个图片提示词，并支持 local workspace 的“我的提示词”。
+- 本地工作区：通过 `opsc workspace`、`opsc serve` 和 `opsc mcp` 管理本机私有画布、素材、提示词、模板、run、artifact、profile 和项目引用。
 - 电商工作流：支持查看 VPS 运行结果，并用模板画布定义可复用的商品生成 DAG。
 
 完整功能说明见 [docs/features.md](docs/features.md)。
@@ -52,6 +53,19 @@ docker compose -f docker-compose.local.yml up -d --build
 
 如需要拉取提示词，可前往:`http://localhost:3000/admin/prompts`
 
+### 本地工作区
+
+个人自用模式建议先初始化 local workspace，并让浏览器只通过本机 `opsc serve` 访问私有数据：
+
+```bash
+go run ./cmd/opsc workspace init --workspace ~/OpsCanvas
+go run ./cmd/opsc serve --workspace ~/OpsCanvas --origin http://localhost:3000
+```
+
+`opsc serve` 默认只监听 `127.0.0.1`，runtime metadata、`bearer.token`、一次性 `launch.secret` 和 session 文件写在 workspace 之外的 XDG state 目录。浏览器只保存 loopback `baseUrl`，不保存 token、launch secret 或 workspace 绝对路径，也不直接写 `~/OpsCanvas`。
+
+MCP 集成使用 `opsc mcp --workspace <path>`。MCP 只是 CLI/core/`opsc serve` 的薄封装，不是新的事实源；当前主要暴露只读、诊断和通过 active `opsc serve` 重建派生索引的维护能力。
+
 ## 效果展示
 
 <table width="100%">
@@ -80,6 +94,8 @@ docker compose -f docker-compose.local.yml up -d --build
 - [后端数据库说明](docs/backend-database.md)
 - [系统配置数据结构](docs/system-settings.md)
 - [接口响应约定](docs/api-response.md)
+- [Local Workspace 数据分离计划](docs/local-workspace-data-separation-plan.md)
+- [Local Workspace v1 Contract](docs/local-workspace-v1-contract.md)
 
 ## 社区支持
 

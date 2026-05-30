@@ -1,5 +1,15 @@
 # AI 项目记忆变更记录
 
+## 2026-05-30 | Local Workspace Phase 8 stabilization verification | commit: pending
+
+- 目标：把 Local Workspace v1 从“功能已铺开”收口到“可验证、可回归、可对外说明”的稳定化状态。
+- 变更：补充 `opsc serve` runtime/session/auth/redaction 回归，覆盖 state 目录和 token/session 文件权限、错误响应脱敏、Origin bearer 拒绝、browser session runtime/workspace 脱敏；补充 AI proxy 回归，确认只使用 profile `secretRef`，不转发浏览器 Authorization/cookie/local headers，缺失 env secret 的错误不泄露路径或 secret；补充本地模板草稿 run happy path，验证固定本地素材复制为 canonical artifact、run artifact ref、node state、event 和 artifact 文件读取。
+- 原因：Phase 7 已铺开 CLI/serve/Web/MCP 能力，但需要在不扩大范围的前提下确认鉴权、脱敏、single-writer 和 canonical artifact ref 规则可以被持续回归。
+- 验证：已运行 Docker `golang:1.25-alpine` `/usr/local/go/bin/gofmt -w internal/localworkspace/serve_test.go`；已运行 `GOPROXY=https://goproxy.cn,direct /usr/local/go/bin/go test ./internal/localworkspace ./cmd/opsc`。`./cmd/opsc` 测试继续覆盖 MCP stdio wrapper smoke。
+- 影响：只改 local workspace 测试、README/features/local workspace contract/pending-test/todo/changelog 和项目记忆；不新增 local executor、不迁移 PDD/VPS run、不做 Full GC、不扩大 MCP 写能力、不新增 canonical object 类型。
+- 风险：真实浏览器、真实模型供应商和真实 Codex / Claude Code MCP client 仍需人工回归；本轮自动化使用 httptest/provider 和本地 HTTP server。
+- 后续：下一阶段优先设计真实 local workflow executor 和 project adapter，但必须继续复用 workspace core、`opsc serve` single-writer、path safety 和 redaction 规则。
+
 ## 2026-05-30 | Local Workspace Phase 7 MCP index rebuild single-writer | commit: pending
 
 - 目标：把 MCP 中唯一会写派生状态的 `opsc_workspace_index_rebuild` 收回到 `opsc serve` single-writer 边界，避免 stdio agent 绕过本地服务直接写索引。

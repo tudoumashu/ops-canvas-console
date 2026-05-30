@@ -2,10 +2,11 @@
 
 ## Current Objective
 
-Phase 7 Web UI adapter 已部分落地：local workspace 底座、`opsc` CLI、`opsc serve` session/runtime/write API 已完成，Web UI 顶部本地工作区连接入口已接入，并通过免鉴权 `/api/health` 区分 `opsc serve` 未启动和已启动但 browser session 未建立/过期；本地私有页面会显示统一状态提示，不再把旧浏览器缓存当事实源。`我的素材`、`我的提示词`、画布项目库、画布项目内图片/视频媒体、画布导入/导出 zip 媒体文件、工作台 text/image/video 生成记录、AI 本地 profile/proxy、本地项目引用、电商工作流私有模板、工作流入口自定义文件夹和本地 run/artifact 基础 UI 已通过 `opsc serve` 读写 local workspace；本地项目面板列表不展示 `rootPath`，编辑时才用 `showPaths=1` 读取路径，含 `credentialRef` 的项目不在 Web UI 写回；本地电商模板的 `material_lookup` 固定素材选择也已改为读取当前 workspace 的图片素材，启动本地 run 时会把固定本地图片素材复制成 canonical artifact 并在 run 内写 artifact ref。浏览器 localforage 对前三类数据只保留新 key 缓存，素材包导入/导出已改为围绕 local workspace 文件端点，素材新增/更新/删除成功后会清理不再被素材或画布引用的 browser media blob，画布保存成功后会清理已写入 workspace 且当前状态不再引用的 browser media blob，画布 zip 导入会清理上传到 workspace 前使用的临时 browser blob，工作台历史不再使用旧 generation log key 作为事实源，图片/视频工作台结果和参考图保存成功后会从 workspace 文件端点回显并清理已保存的 browser reference blob，AI 本地 profile 读取已兼容完整 `secretRef.name` 和脱敏 summary `secretRef.reference`，连接/刷新/断开 local workspace 时会按当前 workspace 加载或清空本地 profile，避免跨 workspace 串用，`opsc:local_workspace_connection` 已加版本迁移，旧 workspace/runtime 持久化字段会降级为仅保留 `baseUrl`，启动时会清理旧 `infinite-canvas:ai_config_store`、`infinite-canvas:asset_store`、`infinite-canvas:prompt_store`、`infinite-canvas:canvas_store`、旧 generation log key 和旧 `ops-canvas-workflow-folders`；`opsc mcp` stdio 薄封装已完成，读取/诊断/dry-run 工具复用既有 CLI JSON 命令，唯一维护写工具 `opsc_workspace_index_rebuild` 通过 active `opsc serve` loopback API 重建派生索引；真实 PDD/VPS executor 和 PDD/VPS run 数据迁移尚未迁移。
+Phase 8 Local Workspace v1 稳定化已进入收口：本轮只做 hardening / verification / docs-sync，不新增 local executor、不迁移现有 PDD/VPS run、不做 Full GC、不扩大 MCP 写能力、不新增 canonical object 类型。已补充 `opsc serve` runtime/session/auth/redaction 回归、AI proxy `secretRef` 与浏览器 header 隔离回归、本地模板草稿 run 到 canonical artifact ref happy path 回归；`cmd/opsc` 测试继续覆盖 MCP stdio wrapper smoke。README、features、contract、pending-test、todo、changelog 和 docs/ai 已同步本地事实源、浏览器缓存边界、旧浏览器测试数据不迁移、现有 PDD/VPS run 不迁移、MCP 只是薄封装等约束。下一阶段仍应优先设计真实 local workflow executor 和 project adapter，但必须复用 workspace core、`opsc serve` single-writer、auth/redaction/path safety 边界。
 
 ## Completed Work
 
+- Phase 8 新增稳定化验证：`opsc serve` state/session/auth/redaction、AI proxy `secretRef` 与浏览器 header 隔离、本地模板草稿 run -> canonical artifact -> run artifact ref happy path；同步 README、features、contract、pending-test、todo、CHANGELOG、项目记忆和中央 Wiki。
 - 已和用户拍板 local-first 数据分离基线：私有模板、run、artifact、个人素材、个人 prompt、本地项目路径和本地日志默认本地；云端只保留账号/授权/计费、公共模板、公共素材和商用 profile 能力。
 - 已确认默认 workspace 为 `~/OpsCanvas`，支持多 workspace；项目文件只保存外部路径引用，不复制进 workspace；生成 artifact 复制进 workspace；secrets 不写普通 JSON；`opsc serve` 使用本地随机 bearer token 或 browser session。
 - 已确认不迁移浏览器历史测试数据，不迁移现有 PDD VPS run；浏览器 IndexedDB/localforage 后续只做 UI 缓存或临时状态。
@@ -112,6 +113,10 @@ Phase 7 Web UI adapter 已部分落地：local workspace 底座、`opsc` CLI、`
 
 ## Validation Status
 
+- passed：Phase 8 已用 Docker `golang:1.25-alpine` 执行 `/usr/local/go/bin/gofmt -w internal/localworkspace/serve_test.go`。
+- passed：Phase 8 已运行 `GOPROXY=https://goproxy.cn,direct /usr/local/go/bin/go test ./internal/localworkspace ./cmd/opsc`，覆盖 `opsc serve` auth/redaction/session、AI proxy `secretRef` 边界、本地模板草稿 run/artifact ref happy path 和 `cmd/opsc` MCP stdio wrapper smoke。
+- passed：Phase 8 已运行 `cd web && npx tsc --noEmit` 和 `git diff --check`。
+- passed：Phase 8 中央 Wiki 已更新轻量 project entity，并运行 `lint_wiki.sh`、`reindex_qmd.sh llm-wiki` 和 `qmd embed`。
 - passed：Phase 0 文档变更已运行 `git diff --check`，diff 范围只包含 Markdown/Mermaid 文档。
 - passed：中央 Wiki 已运行 `lint_wiki.sh`、`reindex_qmd.sh llm-wiki` 和 `qmd embed`。
 - passed：Phase 1 已用 Docker `golang:1.25-alpine` 执行 `gofmt -w internal/localworkspace cmd/opsc`。

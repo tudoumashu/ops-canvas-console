@@ -35,6 +35,8 @@ AI local profile 是 workspace-scoped 会话视图，不是全局浏览器配置
 
 Local profile 的完整 JSON 使用 `secretRef.name` 保存 env var 名；`opsc serve` summary 会脱敏成 `secretRef.reference`。Web UI 读取 profile 时需要兼容这两个字段，但两者都不是 secret 值，不能把它们当 API Key 展示、日志记录或发送给模型供应商。
 
+`/api/local/ai/v1/*` 代理只能向模型供应商转发模型请求必需的 `Content-Type` / `Accept`，并用本地 profile `secretRef` 解析出的 secret 设置供应商 `Authorization`。浏览器传给 `opsc serve` 的 `Authorization`、cookie、local token、自定义 profile header 或 launch secret 不能继续转发给上游；缺失 env/file secret 的错误也不能回显 env value、文件路径、workspace path、bearer token 或 launch secret。
+
 文档和 UI 说明需要区分这两种模式。
 
 ## GORM AutoMigrate 不是显式迁移系统

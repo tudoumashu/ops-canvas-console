@@ -2,6 +2,8 @@
 
 ## Unreleased
 
++ [优化] Local Workspace v1 Phase 8 稳定化：补充 `opsc serve` 鉴权/redaction、AI `secretRef` proxy、MCP stdio wrapper 和本地模板草稿 run/artifact ref 的回归验证。
++ [文档] 同步 README、功能说明、待测试和 TODO，明确 local workspace 是本机私有事实源，浏览器只保留缓存/临时状态，旧浏览器测试数据和现有 PDD/VPS run 不迁移。
 + [新增] PDD 自定义工作流运行页支持人工编辑节点图片副本，并可应用后重跑该商品后续节点。
 + [修复] Flow2API 视频结果改为落盘保存，避免容器重启后临时视频缓存丢失。
 + [修复] PDD 模板工作流运行时图片节点参数规范化对齐原生画布，`quality/size/count` 不再直传非法值。
