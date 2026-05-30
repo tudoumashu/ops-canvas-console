@@ -2,10 +2,11 @@
 
 ## Current Objective
 
-Phase 8 Local Workspace v1 稳定化已进入收口：本轮只做 hardening / verification / docs-sync，不新增 local executor、不迁移现有 PDD/VPS run、不做 Full GC、不扩大 MCP 写能力、不新增 canonical object 类型。已补充 `opsc serve` runtime/session/auth/redaction 回归、CLI `serve` 输出脱敏回归、AI proxy `secretRef` 与浏览器 header 隔离回归、本地模板草稿 run 到 canonical artifact ref happy path 回归；`cmd/opsc` 测试覆盖 MCP stdio wrapper smoke、对象 mutation 工具面冻结、doctor/export plan/GC dry-run/run events/index rebuild。README、features、contract、pending-test、todo、changelog 和 docs/ai 已同步本地事实源、浏览器缓存边界、旧浏览器测试数据不迁移、现有 PDD/VPS run 不迁移、MCP 只是薄封装等约束。下一阶段仍应优先设计真实 local workflow executor 和 project adapter，但必须复用 workspace core、`opsc serve` single-writer、auth/redaction/path safety 边界。
+Phase 8.1 Local Workspace v1 closeout 已完成：本轮只修复并验证 MCP `opsc_workspace_info` 默认输出泄露本地 serve URL 的问题，不进入 Phase 9、不新增 local executor、不迁移现有 PDD/VPS run、不做 Full GC、不扩大 MCP 写能力、不新增 canonical object 类型。`opsc_workspace_info` 默认输出中的 `runtime` 已缩减为 `active`，不再暴露 `baseUrl/host/port/pid/tokenFile/launchSecretFile`；CLI `workspace info`、`opsc serve`、`opsc_workspace_index_rebuild` 和 Web UI 本地连接语义保持不变。Phase 8 手工验收 A-F 已收口为可关闭状态，剩余真实 agent 客户端展示层 spot check、真实模型账号 live call 和提示词显式导入/导出 UI 确认为非阻塞后续项。
 
 ## Completed Work
 
+- Phase 8.1 closeout：修复 MCP `opsc_workspace_info` 默认输出泄露本地 serve URL，新增 active serve runtime redaction 回归测试；用真实 `opsc` 二进制和临时 workspace 复验 MCP tools/list、workspace info/doctor/export plan/GC dry-run、template/run/artifact/profile/project/asset/prompt list、active index rebuild 和 inactive index rebuild，Phase 8 手工验收可关闭。
 - Phase 8 新增稳定化验证：`opsc serve` state/session/auth/redaction、CLI `serve` 输出脱敏、AI proxy `secretRef` 与浏览器 header 隔离、MCP stdio 工具面冻结和诊断/plan/index rebuild smoke、本地模板草稿 run -> canonical artifact -> run artifact ref happy path；同步 README、features、contract、pending-test、todo、CHANGELOG、项目记忆和中央 Wiki。
 - 已和用户拍板 local-first 数据分离基线：私有模板、run、artifact、个人素材、个人 prompt、本地项目路径和本地日志默认本地；云端只保留账号/授权/计费、公共模板、公共素材和商用 profile 能力。
 - 已确认默认 workspace 为 `~/OpsCanvas`，支持多 workspace；项目文件只保存外部路径引用，不复制进 workspace；生成 artifact 复制进 workspace；secrets 不写普通 JSON；`opsc serve` 使用本地随机 bearer token 或 browser session。
@@ -117,6 +118,9 @@ Phase 8 Local Workspace v1 稳定化已进入收口：本轮只做 hardening / v
 - passed：Phase 8 已运行 `GOPROXY=https://goproxy.cn,direct /usr/local/go/bin/go test ./internal/localworkspace ./cmd/opsc`，覆盖 `opsc serve` auth/redaction/session、CLI `serve` 输出脱敏、AI proxy `secretRef` 边界、本地模板草稿 run/artifact ref happy path、`cmd/opsc` MCP stdio wrapper smoke、MCP 工具面冻结、unhealthy doctor tool error、export plan/GC dry-run/run events/index rebuild。
 - passed：Phase 8 已运行 `cd web && npx tsc --noEmit` 和 `git diff --check`。
 - passed：Phase 8 中央 Wiki 已更新轻量 project entity，并运行 `lint_wiki.sh`、`reindex_qmd.sh llm-wiki` 和 `qmd embed`。
+- passed：Phase 8.1 已用 Docker `golang:1.25-alpine` 执行 `/usr/local/go/bin/gofmt -w cmd/opsc/mcp.go cmd/opsc/mcp_test.go`。
+- passed：Phase 8.1 已运行 `GOPROXY=https://goproxy.cn,direct /usr/local/go/bin/go test ./cmd/opsc ./internal/localworkspace`，覆盖 MCP `opsc_workspace_info` active runtime URL/host/port 脱敏和既有 MCP/serve 回归。
+- passed：Phase 8.1 已用真实 `opsc` 二进制、临时 workspace 和 active/inactive `opsc serve` 执行 MCP 目标手工验收；证据为 `/tmp/opsc-phase8-1/evidence-F-mcp-phase8-1.json`，结果 pass。
 - passed：Phase 0 文档变更已运行 `git diff --check`，diff 范围只包含 Markdown/Mermaid 文档。
 - passed：中央 Wiki 已运行 `lint_wiki.sh`、`reindex_qmd.sh llm-wiki` 和 `qmd embed`。
 - passed：Phase 1 已用 Docker `golang:1.25-alpine` 执行 `gofmt -w internal/localworkspace cmd/opsc`。

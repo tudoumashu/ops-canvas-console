@@ -1,5 +1,15 @@
 # AI 项目记忆变更记录
 
+## 2026-05-30 | Local Workspace Phase 8.1 MCP workspace info redaction closeout | commit: pending
+
+- 目标：只修复 MCP `opsc_workspace_info` 默认输出泄露本地 serve URL 的问题，并把 Phase 8 手工验收收口到可关闭状态。
+- 变更：`opsc_workspace_info` 继续调用既有 CLI/core，但在 MCP 包装层对成功 stdout 做专用脱敏，默认把 `data.runtime` 缩减为 `{ "active": true|false }`，不再输出 `runtime.baseUrl`、`runtime.host`、`runtime.port`、`pid`、`tokenFile` 或 `launchSecretFile`。补充 active `opsc serve` 下的 MCP workspace info 回归测试；更新 Phase 8 手工验收报告和 pending-test，将剩余项标记为非阻塞跟进。
+- 原因：CLI `workspace info --json` 和 `opsc serve` 需要保留 runtime metadata，但 MCP 默认输出面向 agent，不应暴露可重建本机 loopback serve URL 的字段。
+- 验证：已运行 Docker `golang:1.25-alpine` `/usr/local/go/bin/gofmt -w cmd/opsc/mcp.go cmd/opsc/mcp_test.go`；已运行 `GOPROXY=https://goproxy.cn,direct /usr/local/go/bin/go test ./cmd/opsc ./internal/localworkspace`；已用真实 `opsc` 二进制、临时 workspace 和 active/inactive `opsc serve` 复验 MCP 目标项，证据写入 `/tmp/opsc-phase8-1/evidence-F-mcp-phase8-1.json`。
+- 影响：只改 MCP `workspace_info` 输出脱敏和测试/文档；不改 CLI `workspace info` 输出、不改 `opsc serve`、不改 `opsc_workspace_index_rebuild`、不改 Web UI 本地连接、不新增 local executor、不扩大 MCP mutation surface。
+- 风险：真实 Codex / Claude Code 客户端 UI 展示层仍可做 spot check，但协议级自动化和真实二进制目标验收已覆盖本轮泄露风险。
+- 后续：可以关闭 Phase 8；进入 Phase 9 前仍需保持 MCP 薄封装、`opsc serve` single-writer、auth/redaction/path safety 边界。
+
 ## 2026-05-30 | Local Workspace Phase 8 stabilization verification | commit: pending
 
 - 目标：把 Local Workspace v1 从“功能已铺开”收口到“可验证、可回归、可对外说明”的稳定化状态。

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [修复] MCP `opsc_workspace_info` 默认输出不再暴露本地 `opsc serve` URL、host 或 port，Phase 8 手工验收已收口为可关闭状态。
 + [优化] Local Workspace v1 Phase 8 稳定化：补充 `opsc serve` 鉴权/redaction、CLI 输出脱敏、AI `secretRef` proxy、MCP stdio wrapper 工具面冻结和本地模板草稿 run/artifact ref 的回归验证。
 + [文档] 同步 README、功能说明、待测试和 TODO，明确 local workspace 是本机私有事实源，浏览器只保留缓存/临时状态，旧浏览器测试数据和现有 PDD/VPS run 不迁移。
 + [新增] PDD 自定义工作流运行页支持人工编辑节点图片副本，并可应用后重跑该商品后续节点。

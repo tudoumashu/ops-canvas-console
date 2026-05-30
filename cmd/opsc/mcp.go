@@ -226,10 +226,18 @@ func callMCPTool(ctx context.Context, opts cliOptions, params json.RawMessage) (
 }
 
 func runMCPCLITool(ctx context.Context, args []string) mcpToolCallResult {
+	return runMCPCLIToolWithStdoutTransform(ctx, args, nil)
+}
+
+func runMCPCLIToolWithStdoutTransform(ctx context.Context, args []string, transform func([]byte) []byte) mcpToolCallResult {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	exitCode := runWithContext(ctx, args, &stdout, &stderr)
-	stdoutText := strings.TrimSpace(stdout.String())
+	stdoutBytes := stdout.Bytes()
+	if transform != nil && exitCode == 0 {
+		stdoutBytes = transform(stdoutBytes)
+	}
+	stdoutText := strings.TrimSpace(string(stdoutBytes))
 	stderrText := strings.TrimSpace(stderr.String())
 	text := stdoutText
 	if stderrText != "" {
@@ -244,7 +252,7 @@ func runMCPCLITool(ctx context.Context, args []string) mcpToolCallResult {
 	structured := map[string]any{
 		"exitCode": exitCode,
 	}
-	if parsed, ok := parseJSONValue(stdout.Bytes()); ok {
+	if parsed, ok := parseJSONValue(stdoutBytes); ok {
 		structured["stdout"] = parsed
 	}
 	if parsed, ok := parseJSONValue(stderr.Bytes()); ok {
@@ -283,6 +291,13 @@ func mcpTools() []mcpToolDefinition {
 			}, nil),
 			BuildArgs: func(opts cliOptions, args map[string]any) ([]string, error) {
 				return mcpCLIArgs(opts, args, []string{"workspace", "info", "--json"})
+			},
+			Call: func(ctx context.Context, opts cliOptions, args map[string]any) (mcpToolCallResult, error) {
+				cliArgs, err := mcpCLIArgs(opts, args, []string{"workspace", "info", "--json"})
+				if err != nil {
+					return mcpToolCallResult{}, err
+				}
+				return runMCPCLIToolWithStdoutTransform(ctx, cliArgs, sanitizeMCPWorkspaceInfoStdout), nil
 			},
 		},
 		{
@@ -421,6 +436,28 @@ func mcpTools() []mcpToolDefinition {
 			},
 		},
 	}
+}
+
+func sanitizeMCPWorkspaceInfoStdout(data []byte) []byte {
+	var envelope map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(data), &envelope); err != nil {
+		return data
+	}
+	body, ok := envelope["data"].(map[string]any)
+	if !ok {
+		return data
+	}
+	runtime, ok := body["runtime"].(map[string]any)
+	if !ok {
+		return data
+	}
+	active, _ := runtime["active"].(bool)
+	body["runtime"] = map[string]any{"active": active}
+	sanitized, err := json.Marshal(envelope)
+	if err != nil {
+		return data
+	}
+	return sanitized
 }
 
 func mcpCLIArgs(opts cliOptions, args map[string]any, command []string) ([]string, error) {

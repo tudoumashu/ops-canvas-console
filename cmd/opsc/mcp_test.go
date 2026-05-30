@@ -109,6 +109,51 @@ func TestMCPWorkspaceInfoToolWrapsCLIWithoutPathLeak(t *testing.T) {
 	}
 }
 
+func TestMCPWorkspaceInfoRedactsActiveRuntimeURL(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
+	root := filepath.Join(t.TempDir(), "workspace")
+	seedQueryWorkspace(t, root)
+	runtime, stopServe := startMCPServe(t, root)
+	defer stopServe()
+	input := `{"jsonrpc":"2.0","id":"workspace-info","method":"tools/call","params":{"name":"opsc_workspace_info","arguments":{"workspace":` + jsonString(root) + `}}}` + "\n"
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runMCPServer(context.Background(), cliOptions{}, strings.NewReader(input), &stdout, &stderr); code != 0 {
+		t.Fatalf("runMCPServer exit = %d stderr=%s", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %s, want empty", stderr.String())
+	}
+	output := stdout.String()
+	for _, sensitive := range []string{
+		root,
+		runtime.BaseURL,
+		`"baseUrl"`,
+		`"host"`,
+		`"port"`,
+		`"pid"`,
+		`"tokenFile"`,
+		`"launchSecretFile"`,
+	} {
+		if strings.TrimSpace(sensitive) != "" && strings.Contains(output, sensitive) {
+			t.Fatalf("MCP workspace info leaked runtime detail %q:\n%s", sensitive, output)
+		}
+	}
+	responses := decodeMCPResponses(t, output)
+	result := responses[0]["result"].(map[string]any)
+	if result["isError"] != false {
+		t.Fatalf("result.isError = %#v\n%s", result["isError"], output)
+	}
+	structured := result["structuredContent"].(map[string]any)
+	parsed := structured["stdout"].(map[string]any)
+	data := parsed["data"].(map[string]any)
+	runtimeInfo := data["runtime"].(map[string]any)
+	if len(runtimeInfo) != 1 || runtimeInfo["active"] != true {
+		t.Fatalf("runtime = %#v, want only active=true\n%s", runtimeInfo, output)
+	}
+}
+
 func TestMCPDoctorExportAndGCPlanTools(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "workspace")
 	seed := seedQueryWorkspace(t, root)

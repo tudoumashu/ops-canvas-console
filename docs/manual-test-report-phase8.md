@@ -1,8 +1,9 @@
 # Phase 8 手工验收报告
 
-测试日期：2026-05-30  
-测试范围：执行 `docs/pending-test.md` 中 Phase 8 剩余手工验收项，不执行真实外部 OpenAI 兼容服务 Key 的 live call。  
-结论：A-E 通过；F 未通过，原因是 MCP `opsc_workspace_info` 默认输出泄露本地 `serveUrl`。
+测试日期：2026-05-30
+Phase 8.1 复验日期：2026-05-30
+测试范围：执行 `docs/pending-test.md` 中 Phase 8 剩余手工验收项，不执行真实外部 OpenAI 兼容服务 Key 的 live call；Phase 8.1 只复验 MCP 目标项。
+结论：A-F 通过，Phase 8 可关闭；剩余真实 agent 客户端展示层 spot check、真实模型账号 live call、提示词显式导入/导出 UI 确认均为非阻塞后续项。
 
 ## 测试环境
 
@@ -14,6 +15,7 @@
 - Fake OpenAI-compatible server：`http://127.0.0.1:19090`
 - 浏览器测试：Playwright / Chromium，使用一次性 browser profile 与一次性 workspace
 - 外部 live call：未执行，按本轮范围只使用 fake OpenAI-compatible server 覆盖代理、模型列表、图片和视频链路
+- Phase 8.1 MCP 复验目录：`/tmp/opsc-phase8-1`
 
 主要启动命令：
 
@@ -22,6 +24,7 @@ node ./node_modules/.bin/next dev --webpack -H 127.0.0.1 -p 13081
 docker run --rm --network host ... PORT=18180 ... go run .
 XDG_STATE_HOME=/tmp/opsc-phase8/state /tmp/opsc-phase8/bin/opsc serve --workspace /tmp/opsc-phase8/workspaces/A --port 17680 --origin http://127.0.0.1:13081
 XDG_STATE_HOME=/tmp/opsc-phase8/state /tmp/opsc-phase8/bin/opsc --workspace /tmp/opsc-phase8/workspaces/A mcp
+XDG_STATE_HOME=/tmp/opsc-phase8-1/state /tmp/opsc-phase8-1/bin/opsc --workspace /tmp/opsc-phase8-1/workspace mcp
 ```
 
 证据目录：
@@ -29,6 +32,7 @@ XDG_STATE_HOME=/tmp/opsc-phase8/state /tmp/opsc-phase8/bin/opsc --workspace /tmp
 - JSON 证据：`/tmp/opsc-phase8/evidence-*.json`
 - 截图：`/tmp/opsc-phase8/screenshots/`
 - fake provider 请求日志：`/tmp/opsc-phase8/fake-openai-requests.jsonl`
+- Phase 8.1 MCP 复验证据：`/tmp/opsc-phase8-1/evidence-F-mcp-phase8-1.json`
 
 ## 验收结果
 
@@ -39,7 +43,7 @@ XDG_STATE_HOME=/tmp/opsc-phase8/state /tmp/opsc-phase8/bin/opsc --workspace /tmp
 | C. 素材、提示词、画布、workbench | PASS，提示词显式导入/导出 UI 未覆盖 | `/tmp/opsc-phase8/evidence-C-local-data-workbench.json` |
 | D. 项目面板、preferences、断连阻断 | PASS | `/tmp/opsc-phase8/evidence-D-projects-preferences.json` |
 | E. 模板、run、artifact、workspace 缓存隔离 | PASS | `/tmp/opsc-phase8/evidence-E-templates-runs-artifacts.json` |
-| F. MCP 只读 client 回归 | FAIL | `/tmp/opsc-phase8/evidence-F-mcp.json` |
+| F. MCP 只读 client 回归 | PASS | 原始失败证据：`/tmp/opsc-phase8/evidence-F-mcp.json`；Phase 8.1 复验证据：`/tmp/opsc-phase8-1/evidence-F-mcp-phase8-1.json` |
 
 ## 关键检查记录
 
@@ -91,30 +95,35 @@ XDG_STATE_HOME=/tmp/opsc-phase8/state /tmp/opsc-phase8/bin/opsc --workspace /tmp
 - 未暴露 create/update/delete/write/import/attach/append 类 mutation 工具。
 - 常规只读 tool call、active workspace index rebuild、inactive workspace index rebuild 阻断均符合预期。
 - 未泄露 workspace 绝对路径、project root、bearer token、launch secret、fake secret value。
-- 失败点：`opsc_workspace_info` 默认输出包含 `runtime.baseUrl`，等价于本地 `serveUrl`。
+- Phase 8.1 复验通过：`opsc_workspace_info` 默认输出中的 `runtime` 只保留 `active=true`，未暴露 `runtime.baseUrl`、`runtime.host`、`runtime.port`、`pid`、`tokenFile`、`launchSecretFile` 或任何可重建本地 serve URL 的字段。
 
 ## 问题与建议
 
-### High：MCP `workspace_info` 泄露本地 serve URL
+### Resolved：MCP `workspace_info` 泄露本地 serve URL
 
-现象：`/tmp/opsc-phase8/evidence-F-mcp.json` 中 `redactionLeaks.workspaceInfo` 包含 `serveUrl`。其他敏感项已正确规避，但 MCP 默认输出仍包含 `runtime.baseUrl`。
+原现象：`/tmp/opsc-phase8/evidence-F-mcp.json` 中 `redactionLeaks.workspaceInfo` 包含 `serveUrl`。其他敏感项已正确规避，但 MCP 默认输出仍包含 `runtime.baseUrl`。
 
-可能根因：
+根因：
 
 - `cmd/opsc/mcp.go` 中 MCP tool 直接包装 `opsc workspace info --json`，没有对 `opsc_workspace_info` 做 MCP 专用脱敏。
 - `cmd/opsc/main.go` 的 workspace info JSON 来自 `workspace.Info(opts.ShowPaths)`。
 - `internal/localworkspace/workspace.go` 的 `Info` 默认包含 `Runtime: w.readRuntimeInfo()`，其中 `readRuntimeInfo` 会返回 `BaseURL`。
 - 当前测试覆盖了 active `workspace_index_rebuild` 不泄露 runtime base URL，但 `opsc_workspace_info` 只覆盖了 workspace path 不泄露，缺少 runtime URL 的断言。
 
-建议：Phase 9 前先修复 MCP `workspace_info` 输出脱敏策略，至少默认隐藏 `runtime.baseUrl`，并补充 `opsc_workspace_info` 不泄露 `serveUrl` 的回归测试。
+修复：只在 MCP 包装层为 `opsc_workspace_info` 增加 stdout JSON 脱敏转换，默认把 `runtime` 缩减为 `{ "active": true|false }`；不改 `opsc serve`、CLI `workspace info`、Web UI 本地连接或 `opsc_workspace_index_rebuild` 读取 active serve runtime 的行为。
 
-### Medium：提示词导入/导出 UI 验收标准需要确认
+验证：
+
+- 自动化：新增 `TestMCPWorkspaceInfoRedactsActiveRuntimeURL`，覆盖 active `opsc serve` 下 MCP `workspace_info` 不泄露 `baseUrl/host/port/pid/tokenFile/launchSecretFile`，且 structuredContent 中 runtime 只剩 `active=true`。
+- 手工：使用真实 `opsc` 二进制和临时 workspace 复验 MCP `initialize`、`tools/list`、workspace info/doctor/export plan/GC dry-run、template/run/artifact/profile/project/asset/prompt list、active index rebuild 和 inactive index rebuild；结果见 `/tmp/opsc-phase8-1/evidence-F-mcp-phase8-1.json`。
+
+### Non-blocking：提示词导入/导出 UI 验收标准需要确认
 
 现象：提示词中心未发现显式导入/导出 UI。本次已验证提示词 CRUD、`content.md` 落盘和公有复制，但没有覆盖“提示词导入/导出”。
 
-建议：确认该验收项是否仍然要求独立 UI。如果要求，需要补齐功能或调整验收描述。
+建议：确认该验收项是否仍然要求独立 UI。如果要求，应作为后续功能单独排期；不作为 Phase 8 关闭阻塞项。
 
-### Low：模板新建下拉在自动化里路由不稳定
+### Non-blocking：模板新建下拉在自动化里路由不稳定
 
 现象：Playwright/CDP 点击新建模板下拉时，模板对象已持久化，但自动化中的页面跳转不稳定。本次从模板列表继续打开该 UI 创建出的模板，并完成编辑、复制、删除和 run 验证。
 
@@ -122,11 +131,11 @@ XDG_STATE_HOME=/tmp/opsc-phase8/state /tmp/opsc-phase8/bin/opsc --workspace /tmp
 
 ## Phase 9 前建议
 
-1. 先修复 MCP `opsc_workspace_info` 的 `serveUrl` 泄露，并加回归测试。
-2. 明确提示词导入/导出是否仍是 Phase 8 验收项。
-3. 在上述问题处理后再进入 Phase 9 的真实 local executor / agent 集成，避免把 MCP 信息边界问题带入下一阶段。
+1. Phase 8.1 已修复并复验 MCP `opsc_workspace_info` 的 serve URL 泄露；Phase 8 可以关闭。
+2. 下一阶段如进入真实 local executor / agent 集成，继续沿用现有 MCP 工具面冻结、`opsc serve` single-writer、auth/redaction/path safety 约束。
+3. 提示词显式导入/导出 UI、真实外部模型账号 live call、真实 Codex / Claude Code 客户端展示层 spot check 可作为非阻塞后续项分别处理。
 
 ## 文档与工作区说明
 
-- 已检查 `docs/todo.md` 与 `docs/pending-test.md`，本次仅新增本报告，没有修改待办或验收清单。
+- Phase 8.1 已更新 `docs/pending-test.md`，明确 Phase 8 手工验收可关闭，剩余事项为非阻塞跟进项。
 - 既有工作区改动 `web/next-env.d.ts` 与本次测试无关，未修改。

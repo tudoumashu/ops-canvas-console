@@ -131,7 +131,7 @@ go run ./cmd/opsc mcp --workspace ~/OpsCanvas
 
 `opsc serve` 默认只监听 `127.0.0.1:17680`，`--port 0` 可使用系统空闲端口，`--origin` 只接受明确的本地浏览器 origin，不接受 `*`。启动后 runtime/state 文件位于 `$XDG_STATE_HOME/opsc/workspaces/<workspaceId>-<rootHash>/`，无 XDG 时 fallback 到 `~/.local/state/opsc/workspaces/<workspaceId>-<rootHash>/`；state 目录权限应为 0700，`bearer.token`、`launch.secret` 和 `sessions.json` 权限应为 0600。CLI 或显式 HTTP client 可用 `Authorization: Bearer <bearer.token>`，browser 应用 `launch.secret` 调 `POST /api/local/bootstrap/session` 换 HttpOnly session；带 `Origin` 的请求不接受 bearer。`GET /health` 和 `GET /api/health` 免鉴权且只返回 `ok`；其它 `/api/local/*` 需要 session 或 bearer。`serve.json`、`workspace info` 和 `--json` 启动输出不得包含 token、launch secret、session id 或 workspace 绝对路径。
 
-`opsc mcp` 是本地 agent 的 stdio MCP server。开发期可直接用 `go run ./cmd/opsc mcp --workspace ~/OpsCanvas`，实际配置 Codex / Claude Code 等 MCP client 时建议先构建 `opsc` 二进制，再把 command 指向该二进制并传 `["mcp", "--workspace", "/home/<user>/OpsCanvas"]`。首版工具只做 workspace 查询、doctor、index rebuild、export/GC dry-run、template/run/artifact/profile/project/asset/prompt 列表和 run status/events；不暴露 canonical object 写入工具、不暴露 `run events --follow`，默认不输出 secrets、workspace 绝对路径或 project `rootPath`。`opsc_workspace_index_rebuild` 是唯一维护写工具，调用前必须先启动同一 workspace 的 `opsc serve`；该工具只从 runtime state 读取相对 `bearer.token` 并调用 loopback `/api/local/workspace/index/rebuild`，不会把 token、token 文件路径或 serve URL 写入 MCP 输出。
+`opsc mcp` 是本地 agent 的 stdio MCP server。开发期可直接用 `go run ./cmd/opsc mcp --workspace ~/OpsCanvas`，实际配置 Codex / Claude Code 等 MCP client 时建议先构建 `opsc` 二进制，再把 command 指向该二进制并传 `["mcp", "--workspace", "/home/<user>/OpsCanvas"]`。首版工具只做 workspace 查询、doctor、index rebuild、export/GC dry-run、template/run/artifact/profile/project/asset/prompt 列表和 run status/events；不暴露 canonical object 写入工具、不暴露 `run events --follow`，默认不输出 secrets、workspace 绝对路径或 project `rootPath`。`opsc_workspace_info` 默认只保留 `runtime.active`，不输出 `runtime.baseUrl`、`runtime.host`、`runtime.port` 或可重建本地 serve URL 的字段。`opsc_workspace_index_rebuild` 是唯一维护写工具，调用前必须先启动同一 workspace 的 `opsc serve`；该工具只从 runtime state 读取相对 `bearer.token` 并调用 loopback `/api/local/workspace/index/rebuild`，不会把 token、token 文件路径或 serve URL 写入 MCP 输出。
 
 Web UI 本地工作区连接：
 
@@ -158,7 +158,7 @@ Phase 8 local workspace 稳定化目标验证：
 docker run --rm -e GOPROXY=https://goproxy.cn,direct -v "$PWD":/src -w /src golang:1.25-alpine /usr/local/go/bin/go test ./internal/localworkspace ./cmd/opsc
 ```
 
-该目标测试覆盖 `opsc serve` 鉴权/redaction/session、CLI `serve` 输出脱敏、AI proxy `secretRef` 与浏览器 header 隔离、本地模板草稿 run 到 canonical artifact ref happy path，以及 `cmd/opsc` MCP stdio wrapper smoke、工具面冻结、doctor/export plan/GC dry-run/run events/index rebuild。Go 文件改动后可用 Docker 执行 `gofmt`，避免本机未安装 Go：
+该目标测试覆盖 `opsc serve` 鉴权/redaction/session、CLI `serve` 输出脱敏、AI proxy `secretRef` 与浏览器 header 隔离、本地模板草稿 run 到 canonical artifact ref happy path，以及 `cmd/opsc` MCP stdio wrapper smoke、工具面冻结、`workspace_info` active runtime URL/host/port 脱敏、doctor/export plan/GC dry-run/run events/index rebuild。Go 文件改动后可用 Docker 执行 `gofmt`，避免本机未安装 Go：
 
 ```bash
 docker run --rm -v "$PWD":/src -w /src golang:1.25-alpine /usr/local/go/bin/gofmt -w internal/localworkspace cmd/opsc
