@@ -3,6 +3,8 @@ package localworkspace
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +13,7 @@ import (
 	"net/url"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -329,13 +332,15 @@ func upsertHybridEcommerceTemplate(workspace Workspace, remote hybridPDDTemplate
 	metadata := map[string]any{
 		"source": "hybrid_ecommerce_vps",
 		hybridEcommerceKey: map[string]any{
-			"version":          hybridEcommerceVersion,
-			"backend":          hybridEcommerceBackend,
-			"remoteTemplateId": remote.ID,
-			"remoteTitle":      remote.Title,
-			"remoteUpdatedAt":  remote.UpdatedAt,
-			"profileId":        strings.TrimSpace(config.ProfileID),
-			"channelId":        strings.TrimSpace(config.ChannelID),
+			"version":           hybridEcommerceVersion,
+			"backend":           hybridEcommerceBackend,
+			"remoteTemplateId":  remote.ID,
+			"remoteTitle":       remote.Title,
+			"remoteUpdatedAt":   remote.UpdatedAt,
+			"importedAt":        timeNowRFC3339(),
+			"sourceFingerprint": hybridRemoteTemplateFingerprint(remote),
+			"profileId":         strings.TrimSpace(config.ProfileID),
+			"channelId":         strings.TrimSpace(config.ChannelID),
 		},
 	}
 	hybrid := metadata[hybridEcommerceKey].(map[string]any)
@@ -535,7 +540,7 @@ func executeHybridEcommerceRun(ctx context.Context, workspace Workspace, run Env
 }
 
 func syncHybridRemoteOverview(ctx context.Context, workspace Workspace, runID string, runResult ExecutorRunResult, client hybridVPSClient, config hybridEcommerceConfig, remoteRunID string, overview hybridPDDOverview) (Envelope[RunData], ExecutorRunResult, error) {
-	if err := writeHybridStageStates(workspace, runID, overview.Stages); err != nil {
+	if err := writeHybridStageStates(workspace, runID, overview.Stages, client.redactRemoteText); err != nil {
 		return Envelope[RunData]{}, runResult, err
 	}
 	status := hybridLocalRunStatus(overview)
@@ -592,12 +597,13 @@ func syncHybridRemoteOverview(ctx context.Context, workspace Workspace, runID st
 		}
 		terminalData := cloneMap(output)
 		terminalData["artifactRefs"] = artifactCount
+		recentErrors := hybridRedactRemoteTexts(client, overview.RecentErrors)
 		if len(overview.RecentErrors) > 0 {
-			terminalData["recentErrors"] = overview.RecentErrors
+			terminalData["recentErrors"] = recentErrors
 		}
 		errorMessage := ""
 		if status == RunStatusError {
-			errorMessage = firstNonEmptyString(overview.Run.RecentError, strings.Join(overview.RecentErrors, "; "))
+			errorMessage = firstNonEmptyString(client.redactRemoteText(overview.Run.RecentError), strings.Join(recentErrors, "; "))
 		}
 		run, err = updateExecutorRun(workspace, run, status, terminalData, errorMessage)
 		if err != nil {
@@ -617,7 +623,7 @@ func syncHybridRemoteOverview(ctx context.Context, workspace Workspace, runID st
 	return run, runResult, nil
 }
 
-func writeHybridStageStates(workspace Workspace, runID string, stages []hybridPDDStage) error {
+func writeHybridStageStates(workspace Workspace, runID string, stages []hybridPDDStage, sanitize func(string) string) error {
 	current, err := executorNodeStateMap(workspace, runID)
 	if err != nil {
 		return err
@@ -636,8 +642,12 @@ func writeHybridStageStates(workspace Workspace, runID string, stages []hybridPD
 			"idle":    stage.Idle,
 			"skipped": stage.Skipped,
 		}
-		if stage.RecentError != "" {
-			output["recentError"] = stage.RecentError
+		recentError := stage.RecentError
+		if sanitize != nil {
+			recentError = sanitize(recentError)
+		}
+		if recentError != "" {
+			output["recentError"] = recentError
 		}
 		data := RunNodeStateData{
 			NodeID:   nodeID,
@@ -652,7 +662,7 @@ func writeHybridStageStates(workspace Workspace, runID string, stages []hybridPD
 			data.FinishedAt = timeNowRFC3339()
 		}
 		if state == RunStatusError {
-			data.Error = stage.RecentError
+			data.Error = recentError
 		}
 		if _, err := writeExecutorNodeState(workspace, runID, current[nodeID], data); err != nil {
 			return err
@@ -697,7 +707,10 @@ func syncHybridRemoteArtifacts(ctx context.Context, workspace Workspace, runID s
 }
 
 func syncHybridRemoteFile(ctx context.Context, workspace Workspace, runID string, client hybridVPSClient, config hybridEcommerceConfig, remoteRunID string, productKey string, nodeID string, title string, remotePath string, kind string, mimeType string, role string, slot string, order int) error {
-	remotePath = strings.TrimSpace(remotePath)
+	remotePath, err := normalizeHybridRemoteArtifactPath(remotePath)
+	if err != nil {
+		return err
+	}
 	if remotePath == "" || hybridRemoteArtifactExists(workspace, runID, remoteRunID, remotePath) {
 		return nil
 	}
@@ -935,7 +948,7 @@ func (client hybridVPSClient) doJSON(ctx context.Context, method string, apiPath
 		return WrapError(ErrorInternal, "read hybrid ecommerce response", 5, err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return NewError(ErrorWorkspaceInvalid, "hybrid ecommerce request failed", 2, map[string]any{"status": response.StatusCode, "message": hybridAPIErrorMessage(responseBody)})
+		return NewError(ErrorWorkspaceInvalid, "hybrid ecommerce request failed", 2, map[string]any{"status": response.StatusCode, "message": client.redactRemoteText(hybridAPIErrorMessage(responseBody))})
 	}
 	var envelope struct {
 		Code int             `json:"code"`
@@ -946,7 +959,7 @@ func (client hybridVPSClient) doJSON(ctx context.Context, method string, apiPath
 		return WrapError(ErrorWorkspaceInvalid, "parse hybrid ecommerce response", 2, err)
 	}
 	if envelope.Code != 0 {
-		return NewError(ErrorWorkspaceInvalid, firstNonEmptyString(envelope.Msg, "hybrid ecommerce api failed"), 2, nil)
+		return NewError(ErrorWorkspaceInvalid, firstNonEmptyString(client.redactRemoteText(envelope.Msg), "hybrid ecommerce api failed"), 2, nil)
 	}
 	if target != nil {
 		if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
@@ -1072,6 +1085,84 @@ func normalizeHybridBaseURL(value string) (string, error) {
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
+func hybridRemoteTemplateFingerprint(remote hybridPDDTemplate) string {
+	payload := map[string]any{
+		"id":           remote.ID,
+		"workflowType": remote.WorkflowType,
+		"title":        remote.Title,
+		"description":  remote.Description,
+		"spec":         remote.Spec,
+		"updatedAt":    remote.UpdatedAt,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(encoded)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func normalizeHybridRemoteArtifactPath(value string) (string, error) {
+	raw := strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	if raw == "" {
+		return "", nil
+	}
+	if strings.Contains(raw, "://") || strings.HasPrefix(raw, "/") {
+		return "", NewError(ErrorWorkspaceInvalid, "hybrid ecommerce remote artifact path is invalid", 2, nil)
+	}
+	cleaned := path.Clean(raw)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", NewError(ErrorWorkspaceInvalid, "hybrid ecommerce remote artifact path is invalid", 2, nil)
+	}
+	return cleaned, nil
+}
+
+var (
+	hybridBearerPattern       = regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._~+/=-]+`)
+	hybridCredentialPattern   = regexp.MustCompile(`(?i)(authorization|cookie|token|api[_-]?key)\s*[:=]\s*[^,\s;]+`)
+	hybridRemotePathPattern   = regexp.MustCompile(`(^|[\s"'=:])/(?:opt|srv|home|root|var|tmp|app|mnt|data)[^\s"',;]*`)
+	hybridWorkspacePathMarker = regexp.MustCompile(`ws_[A-Za-z0-9._-]+`)
+)
+
+func (client hybridVPSClient) redactRemoteText(value string) string {
+	redacted := strings.TrimSpace(value)
+	if redacted == "" {
+		return ""
+	}
+	for _, secret := range []string{client.token} {
+		secret = strings.TrimSpace(secret)
+		if secret != "" {
+			redacted = strings.ReplaceAll(redacted, secret, "<redacted>")
+		}
+	}
+	redacted = hybridBearerPattern.ReplaceAllString(redacted, "Bearer <redacted>")
+	redacted = hybridCredentialPattern.ReplaceAllString(redacted, "$1=<redacted>")
+	redacted = hybridRemotePathPattern.ReplaceAllStringFunc(redacted, func(match string) string {
+		if len(match) == 0 || match[0] == '/' {
+			return "<remote-path>"
+		}
+		return string(match[0]) + "<remote-path>"
+	})
+	redacted = hybridWorkspacePathMarker.ReplaceAllString(redacted, "ws_<redacted>")
+	if len(redacted) > 2000 {
+		redacted = redacted[:2000] + "..."
+	}
+	return redacted
+}
+
+func hybridRedactRemoteTexts(client hybridVPSClient, values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if redacted := client.redactRemoteText(value); redacted != "" {
+			out = append(out, redacted)
+		}
+	}
+	return out
 }
 
 func hybridSecretEnvRef(name string) *SecretRef {

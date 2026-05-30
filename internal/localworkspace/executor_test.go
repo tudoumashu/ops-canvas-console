@@ -405,6 +405,10 @@ func TestHybridEcommerceImportAndExecutorSyncsRemoteRun(t *testing.T) {
 	if !imported.Created || imported.Template.Data.Title != "Confirmed Ecommerce" {
 		t.Fatalf("imported = %#v, want created ecommerce template", imported)
 	}
+	hybridMetadata, ok := asMapStringAny(imported.Template.Data.Metadata[hybridEcommerceKey])
+	if !ok || stringFromMap(hybridMetadata, "sourceFingerprint") == "" || stringFromMap(hybridMetadata, "importedAt") == "" {
+		t.Fatalf("hybrid metadata = %#v, want source fingerprint and importedAt", imported.Template.Data.Metadata[hybridEcommerceKey])
+	}
 	draft, err := CreateHybridEcommerceRun(context.Background(), HybridEcommerceRunOptions{
 		WorkspacePath: root,
 		TemplateID:    imported.Template.ID,
@@ -492,6 +496,100 @@ func TestHybridEcommerceImportAndExecutorSyncsRemoteRun(t *testing.T) {
 	for _, secret := range []string{"remote-secret", "/srv/ops/private/run"} {
 		if strings.Contains(string(encoded), secret) {
 			t.Fatalf("observed workspace data leaked %q:\n%s", secret, encoded)
+		}
+	}
+}
+
+func TestHybridEcommerceRedactsRemoteErrors(t *testing.T) {
+	t.Setenv("OPSC_HYBRID_TEST_TOKEN", "remote-secret")
+	root := filepath.Join(t.TempDir(), "workspace")
+	workspace, profileID, _ := seedExecutorWorkspace(t, root)
+
+	var remoteRunID string
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/admin/workflows/pdd/templates/remote_tpl":
+			_, _ = io.WriteString(w, `{"code":0,"data":{"id":"remote_tpl","workflowType":"pdd","title":"Redaction Ecommerce","spec":{"version":1,"nodes":[{"id":"stage_generate","operation":"image_generation","title":"Generate"}],"edges":[],"settings":{}}},"msg":"ok"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/admin/workflows/pdd/templates/remote_tpl/runs":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode start payload: %v", err)
+			}
+			remoteRunID = payload["runId"].(string)
+			_, _ = io.WriteString(w, `{"code":0,"data":{"runId":"`+remoteRunID+`"},"msg":"ok"}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/overview"):
+			_, _ = io.WriteString(w, `{"code":0,"data":{"run":{"runId":"`+remoteRunID+`","status":"failed","completed":true,"productTotal":1,"failedProducts":1,"recentError":"Bearer remote-secret failed at /srv/private/run"},"stages":[{"id":"stage_generate","title":"Generate","status":"failed","total":1,"failed":1,"recentError":"token=remote-secret path=/opt/pdd/private"}],"products":[],"recentErrors":["Authorization: Bearer remote-secret from /home/admin/private"]},"msg":"ok"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer remote.Close()
+
+	profile := readExecutorProfile(t, workspace, profileID)
+	profile.Data.Channels[0].Protocol = "ops-canvas-vps"
+	profile.Data.Channels[0].BaseURL = remote.URL
+	profile.Data.Channels[0].SecretRef = &SecretRef{Type: SecretRefTypeEnv, Name: "OPSC_HYBRID_TEST_TOKEN"}
+	if err := WriteProfile(workspace, profile); err != nil {
+		t.Fatalf("WriteProfile() error = %v", err)
+	}
+	imported, err := ImportHybridEcommerceTemplate(context.Background(), HybridEcommerceImportOptions{
+		WorkspacePath:    root,
+		RemoteTemplateID: "remote_tpl",
+		ProfileID:        profileID,
+		ChannelID:        "openai",
+		HTTPClient:       remote.Client(),
+	})
+	if err != nil {
+		t.Fatalf("ImportHybridEcommerceTemplate() error = %v", err)
+	}
+	draft, err := CreateHybridEcommerceRun(context.Background(), HybridEcommerceRunOptions{
+		WorkspacePath: root,
+		TemplateID:    imported.Template.ID,
+		ProfileID:     profileID,
+	})
+	if err != nil {
+		t.Fatalf("CreateHybridEcommerceRun() error = %v", err)
+	}
+	result, err := RunExecutorOnce(context.Background(), ExecutorOptions{WorkspacePath: root, RunID: draft.Run.ID, HTTPClient: remote.Client()})
+	if err != nil {
+		t.Fatalf("RunExecutorOnce() error = %v", err)
+	}
+	if len(result.Runs) != 1 || result.Runs[0].Status != RunStatusError {
+		t.Fatalf("executor result = %#v, want failed hybrid run", result)
+	}
+	status, err := GetRunStatus(workspace, draft.Run.ID)
+	if err != nil {
+		t.Fatalf("GetRunStatus() error = %v", err)
+	}
+	events, err := ReadRunEvents(workspace, draft.Run.ID, 0)
+	if err != nil {
+		t.Fatalf("ReadRunEvents() error = %v", err)
+	}
+	encoded, err := json.Marshal(map[string]any{"result": result, "status": status, "events": events})
+	if err != nil {
+		t.Fatalf("marshal observed data: %v", err)
+	}
+	for _, leaked := range []string{"remote-secret", "/srv/private", "/opt/pdd", "/home/admin"} {
+		if strings.Contains(string(encoded), leaked) {
+			t.Fatalf("observed workspace data leaked %q:\n%s", leaked, encoded)
+		}
+	}
+}
+
+func TestHybridEcommerceRejectsUnsafeRemoteArtifactPath(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspace")
+	result, err := Init(InitOptions{Path: root, Name: "Hybrid Artifact Guard"})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	for _, remotePath := range []string{"/srv/private/output.png", "../private/output.png", "https://example.invalid/output.png"} {
+		err := syncHybridRemoteFile(context.Background(), result.Workspace, "run_missing", hybridVPSClient{}, hybridEcommerceConfig{RemoteTemplateID: "remote_tpl"}, "remote_run", "prod", "node", "Output", remotePath, "image", "image/png", "preview", "artifact", 0)
+		if err == nil {
+			t.Fatalf("syncHybridRemoteFile(%q) error = nil, want invalid path", remotePath)
+		}
+		if strings.Contains(err.Error(), remotePath) {
+			t.Fatalf("unsafe path leaked in error %q: %v", remotePath, err)
 		}
 	}
 }

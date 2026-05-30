@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [优化] Local Workspace hybrid ecommerce：导入模板 metadata 增加 `sourceFingerprint/importedAt`，Web 保存本地 hybrid 模板时保留远端映射，`opsc serve` 创建 run 时保存 template snapshot；远端错误文本和 artifact path 同步前增加脱敏与相对路径校验，并完成 `96.9.225.98` 真实 VPS smoke，确认导入、dispatch、状态同步和 5 个 canonical artifact/ref 回写成功。
 + [新增] Local Workspace hybrid ecommerce：新增 `opsc ecommerce import-template`、`opsc ecommerce create-run`、executor 的 VPS PDD API backend 和 `tools/hybrid_ecommerce_vps_smoke.py` smoke helper，可把已确认远端电商模板重建为本地 canonical template，创建 pending local run，并把远端 run 状态和关键 artifact 同步回 local workspace。
 + [新增] Local Workflow Executor Phase 10：接入 run `projectId`、project capability/path guard、`condition`/`script`、节点级 retry、项目输出映射和 project-aware artifact 写入校验，并补充 Web UI local workspace browser smoke 脚本。
 + [新增] Local Workflow Executor MVP：新增 `opsc executor`，可领取 local workspace 中 `waiting_for_executor` run，执行固定本地素材、文本生成和图片生成节点，并写回 canonical node state、events、artifact 与 run artifact ref。

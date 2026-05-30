@@ -1,11 +1,21 @@
 # AI 项目记忆变更记录
 
+## 2026-05-31 | Hybrid Ecommerce golden path hardening and VPS smoke pass | commit: pending
+
+- 目标：按 Phase 11 收口一条“已确认模板本地重建 + 真实 VPS-backed run dispatch/sync”的黄金路径，同时保持 local workspace 为事实源，不扩大 MCP 写面或迁移旧 PDD/VPS run。
+- 变更：hybrid template 导入 metadata 增加 `importedAt` 和 `sourceFingerprint`；Web UI 保存已导入 local hybrid template 时保留 `metadata/settings.hybridEcommerce`，避免编辑后丢失远端映射；`opsc serve` 创建 local run 时读取 template snapshot 并保存到 run 目录；hybrid executor 同步远端错误文本前做 token/path/workspace marker 脱敏，并拒绝 URL、绝对路径和 `..` 逃逸的远端 artifact path。
+- 原因：真实 VPS smoke 需要证明本地 canonical template/run/artifact 链路可复用已部署电商模板，同时不能把远端路径、token 或浏览器状态变成新的事实源。
+- 验证：已用 Docker `golang:1.25-alpine` 执行 `gofmt`；已运行 `GOPROXY=https://goproxy.cn,direct go test ./internal/localworkspace ./cmd/opsc`；已运行 `cd web && npx tsc --noEmit`。真实 VPS `96.9.225.98` smoke 通过：导入远端模板 `workflow-template-381c428b-fc1c-43b4-9b2f-7ce885e3e29e`，创建本地 run `run_01KSWZBMRTMT9V5H8MB9BEBK2C`，executor dispatch 远端 run 后同步到 `success`，8 个节点 success，`artifactCount=5`。
+- 影响：只加固 local workspace hybrid path、相关 Web metadata 保留和文档/测试；不改旧云端/后台/PDD 路由语义，不新增运维动作，不迁移历史 VPS run，不扩大 MCP mutation surface。
+- 风险：真实 Web UI 入口发起 hybrid run 仍需人工回归；远端 `source` image_edit 节点本次耗时约 26 分钟，后续需要 watch/worker 体验和更细粒度远端事件同步。
+- 后续：Phase 12 优先产品化常驻本地 worker/watch mode、Web UI hybrid run 浏览器回归、专用文章/视频/电商 adapter 深化和远端事件增量同步；不要先迁移旧 VPS run 或扩大 MCP 写面。
+
 ## 2026-05-31 | Hybrid Ecommerce VPS smoke helper and probe | commit: pending
 
 - 目标：为 Phase 11 真实 VPS API smoke 留下可重复执行的最小证据链路，避免后续手工串命令时绕过 local workspace canonical/source 和 `opsc` 边界。
-- 变更：新增并加固 `tools/hybrid_ecommerce_vps_smoke.py`，只编排 `opsc ecommerce import-template`、`opsc ecommerce create-run`、`opsc executor --run`、`opsc run status` 和 `opsc artifact list --run`；不直接读取 workspace 文件、不直接调用 VPS API、不打印 secret，并可写出 redacted evidence JSON。helper 支持显式 env `secretRef` 或已有 workspace profile/channel 两种凭据路径，且不再默认传不存在的 `default/vps` profile/channel。新增 `docs/manual-test-report-phase11.md` 记录当前目标 VPS probe、缺失 env/template 前置条件和后续复测命令。
+- 变更：新增并加固 `tools/hybrid_ecommerce_vps_smoke.py`，只编排 `opsc ecommerce import-template`、`opsc ecommerce create-run`、`opsc executor --run`、`opsc run status` 和 `opsc artifact list --run`；不直接读取 workspace 文件、不直接调用 VPS API、不打印 secret，并可写出 redacted evidence JSON。helper 支持显式 env `secretRef` 或已有 workspace profile/channel 两种凭据路径，且不再默认传不存在的 `default/vps` profile/channel。该条记录中的前置条件不足结论已被后续真实 VPS smoke pass 结果 supersede。
 - 原因：Phase 11 的真实验收必须证明本地 canonical run 能触发 VPS PDD API 并同步 artifact；当前网络/credential 条件不足，应把失败前置条件记录为可复现证据，而不是把 smoke 误写成通过。
-- 验证：已运行 `python -m py_compile tools/hybrid_ecommerce_vps_smoke.py`；已用缺失 credential source 的场景执行 helper，返回 exit 2，并生成只含 redacted workspace、remote URL、template placeholder 和 missing prerequisite 的 evidence。最新网络 probe 显示目标 `92.9.225.98` 的 TCP 22/443/80/18080/13000 可连通，但 SSH banner/key exchange 和 HTTP(S) health 仍不可用。
+- 验证：已运行 `python -m py_compile tools/hybrid_ecommerce_vps_smoke.py`；已用缺失 credential source 的场景执行 helper，返回 exit 2，并生成只含 redacted workspace、remote URL、template placeholder 和 missing prerequisite 的 evidence。该条记录中的旧目标地址探测结果已被后续 `96.9.225.98` 真实 smoke 通过结果 supersede。
 - 影响：只新增 smoke helper 和文档/项目记忆；不改业务代码、不改 Web UI、不扩大 MCP 写面、不迁移旧 PDD/VPS run。
 - 风险：真实 VPS API smoke 仍未完成；需要可达 API、真实 admin credential 和已确认 template id 后重新执行 helper。
 - 后续：拿到前置条件后执行 `tools/hybrid_ecommerce_vps_smoke.py --workspace ~/OpsCanvas --input-file /path/to/hybrid-input.json --evidence /tmp/opsc-phase11-vps-smoke.json`，并把结果更新到 `docs/manual-test-report-phase11.md`。
@@ -17,8 +27,8 @@
 - 原因：用户后续需要用 CLI/MCP/agent 驱动同一套 local-first 工作流；导入模板和 executor 中间需要一个可脚本化、可测试的 canonical run draft 创建入口，但不能让浏览器或 VPS run dir 成为事实源。
 - 验证：已用 Docker `golang:1.25-alpine` 执行 `/usr/local/go/bin/gofmt -w cmd/opsc/main.go cmd/opsc/main_test.go internal/localworkspace/executor_test.go internal/localworkspace/hybrid_ecommerce.go`；已运行 `GOPROXY=https://goproxy.cn,direct /usr/local/go/bin/go test ./internal/localworkspace ./cmd/opsc`，覆盖 CLI create-run 脱敏、template defaults 合并、waiting event、pending node state 和 hybrid executor 继续从该 run 执行。
 - 影响：只增加 local workspace hybrid run draft 的 core/CLI/test/doc；不改旧 `main.go`、router、service、repository、DB 行为，不改 Web UI 语义，不迁移现有 PDD/VPS run，不扩大 MCP mutation surface。
-- 风险：真实 VPS smoke 当前仍未完成；目标 VPS `92.9.225.98` 通过 SSH `-p 443` banner exchange 超时、SSH `-p 22` key exchange 被关闭，直接 health 访问超时或 empty reply，且本机未设置 `OPSC_VPS_ADMIN_TOKEN` / `OPSC_HYBRID_VPS_TOKEN` / `PDD_ADMIN_TOKEN` 与远端 template id env。
-- 后续：拿到可达 VPS API、admin credential 和确认 template id 后，按 `import-template -> create-run -> executor --run <run_id> -> run status/artifact list` 做真实 smoke；之后再补 Web UI 一条 hybrid run 浏览器回归和远端事件增量同步。
+- 风险：该条记录写入时真实 VPS smoke 尚未完成；旧目标地址和缺失前置条件已被后续 `96.9.225.98` 真实 smoke 通过结果 supersede。
+- 后续：后续重点转为 Web UI 一条 hybrid run 浏览器回归、watch/worker 产品化和远端事件增量同步。
 
 ## 2026-05-30 | Hybrid Ecommerce VPS backend MVP | commit: pending
 

@@ -32,7 +32,20 @@ func (api *serveAPI) createRun(w http.ResponseWriter, r *http.Request) {
 		writeServeErrorFromError(w, err)
 		return
 	}
-	if err := SaveRun(api.workspace, document, SaveRunOptions{}); err != nil {
+	saveOptions := SaveRunOptions{}
+	if templateID := strings.TrimSpace(document.Data.TemplateID); templateID != "" {
+		template, err := ReadTemplate(api.workspace, templateID)
+		if err != nil {
+			var workspaceErr *Error
+			if !asLocalWorkspaceError(err, &workspaceErr) || workspaceErr.Code != ErrorWorkspaceNotFound {
+				writeServeErrorFromError(w, err)
+				return
+			}
+		} else {
+			saveOptions.TemplateSnapshot = &template
+		}
+	}
+	if err := SaveRun(api.workspace, document, saveOptions); err != nil {
 		writeServeErrorFromError(w, err)
 		return
 	}

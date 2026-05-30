@@ -4,9 +4,9 @@
 
 本报告记录 hybrid ecommerce local workspace -> VPS PDD API backend 的目标验收状态。
 
-已实现的本地链路：
+已实现的黄金路径：
 
-- `opsc ecommerce import-template`：通过 workspace profile/channel `secretRef` 导入已确认远端 PDD template，重建为本地 canonical template。
+- `opsc ecommerce import-template`：从已确认 VPS PDD template API 导入远端 template，重建为本地 canonical template。
 - `opsc ecommerce create-run`：基于已导入 hybrid template 创建 pending local run、template snapshot、pending node state 和 `run.waiting_for_executor` event。
 - `opsc executor --run <run_id>`：对 `metadata.hybridEcommerce.backend=vps_pdd` 模板创建远端 run、轮询 overview/product-detail、下载 key artifact，并写回本地 canonical artifact/ref/events/node state。
 - `tools/hybrid_ecommerce_vps_smoke.py`：只编排上述 `opsc` 命令，不直接读写 workspace 文件，不直接调用 VPS API，不打印 secret；支持显式 env `secretRef` 或已有 workspace profile/channel 两种凭据路径。
@@ -21,153 +21,140 @@
 
 ## Current Result
 
-状态：`BLOCKED`
+状态：`PASS`
 
-原因：当前环境缺少真实 admin credential 和远端 template id，且目标 VPS API 从本机不可稳定访问；因此无法证明真实 VPS API end-to-end run 已成功。
+已确认环境：
 
-已覆盖的要求：
+- VPS：`96.9.225.98`。
+- 访问方式：本机 SSH key 连接 VPS `443` 端口，并通过 SSH tunnel 把本地 `127.0.0.1:18180` 转发到 VPS 本机 API `127.0.0.1:18080`。
+- API health：VPS 本机 `/api/health` 返回 `ok`。
+- 已确认远端模板：`workflow-template-381c428b-fc1c-43b4-9b2f-7ce885e3e29e`，标题 `电商商品主图模板 v2`，`workflowType=pdd`。
+- 凭证来源：从 VPS 已部署画布项目的 server-side admin login 路径生成临时 admin token，并只作为本地 `OPSC_HYBRID_VPS_TOKEN` env `secretRef` 注入 smoke；未输出 token，未写入 workspace JSON 或文档。
 
-- 本地 canonical template import / run draft / artifact ref 规则已由 Go 自动化测试覆盖。
-- 浏览器不保存或发送 VPS admin credential 的边界保持不变；Phase 11 headless smoke 通过 `opsc` 和本机 `secretRef` 执行。
-- smoke helper 已补齐，后续拿到可达 VPS API、credential 和 template id 后可一条命令复测。
+真实 VPS smoke 结果：
 
-未完成的要求：
-
-- 尚未完成真实 VPS API smoke，即真实导入远端 template、创建 local run、executor 触发 VPS run、同步 artifacts 并确认本地 run 进入终态。
+- 本地导入模板成功，生成本地 template `tpl_01KSWZBMGT7TN7A0PMV137XA93`。
+- 本地创建 run 成功，生成本地 run `run_01KSWZBMRTMT9V5H8MB9BEBK2C`。
+- executor 成功 dispatch 远端 run `hybrid_run_01KSWZBMRTMT9V5H8MB9BEBK2C`。
+- local run 最终状态为 `success`。
+- 8 个模板节点均回写为 `success`：`input`、`reference`、`source`、`mockup_base`、`mockup`、`main`、`package`、`sync_local`。
+- 本地 canonical artifact/ref 同步成功，`artifactCount=5`。
+- 远端日志显示 run 完成，耗时约 `1744.8s`；其中 `source` 的 `image_edit` 节点耗时最长。
 
 ## Evidence
 
-### Environment
+### First Probe
 
-当前本机未设置以下必要变量：
-
-```text
-OPSC_VPS_ADMIN_TOKEN
-OPSC_HYBRID_VPS_TOKEN
-PDD_ADMIN_TOKEN
-OPSC_HYBRID_REMOTE_TEMPLATE_ID
-OPSC_VPS_REMOTE_TEMPLATE_ID
-OPSC_HYBRID_VPS_URL
-OPSC_VPS_URL
-```
-
-### Network Probe
-
-目标 VPS：`92.9.225.98`
-
-| Probe | Result |
-| --- | --- |
-| TCP `22` | open |
-| TCP `443` | open |
-| TCP `80` | open |
-| TCP `18080` | open |
-| TCP `13000` | open |
-| SSH `-p 443` | banner exchange timeout |
-| SSH `-p 22` | key exchange closed by remote host |
-| `http://92.9.225.98:18080/api/health` | empty reply or timeout |
-| `http://92.9.225.98:13000/workflows/ecommerce` | empty reply |
-| `http://92.9.225.98/api/health` | timeout |
-| `https://92.9.225.98/api/health` | SSL connection timeout |
-
-### Smoke Helper Prerequisite Check
-
-Command shape:
-
-```bash
-tmp_input=$(mktemp)
-tmp_evidence=$(mktemp)
-printf '{"inputs":[{"productTitle":"smoke"}]}' > "$tmp_input"
-
-tools/hybrid_ecommerce_vps_smoke.py \
-  --workspace /tmp/opsc-phase11-real-smoke \
-  --remote-url http://92.9.225.98:18080 \
-  --remote-template remote_tpl_placeholder \
-  --input-file "$tmp_input" \
-  --evidence "$tmp_evidence"
-```
-
-Observed result:
+第一次真实 smoke 使用了低成本占位输入 `white pillow`。该请求成功完成本地导入、run 创建、远端 dispatch 和错误同步，但远端素材匹配失败：
 
 ```text
-missing required smoke prerequisite: --secret-env/OPSC_HYBRID_SECRET_ENV or OPSC_HYBRID_PROFILE_ID/OPSC_HYBRID_CHANNEL_ID
-exit=2
+素材库未匹配到输入角色：white pillow
 ```
 
-Redacted evidence:
+结论：这不是 local workspace/hybrid executor bug，而是已确认模板需要使用 VPS 素材库中存在的角色字段。
+
+### Successful Smoke Input
+
+第二次 smoke 使用 VPS 素材库中已存在的角色：
 
 ```json
 {
-  "workspace": "<redacted>",
-  "remoteUrl": "http://92.9.225.98:18080",
-  "remoteTemplateId": "remote_tpl_placeholder",
-  "profile": "",
-  "channel": "",
-  "secretEnv": "",
-  "credentialSource": "missing",
-  "steps": [],
-  "ok": false,
-  "missing": [
-    "--secret-env/OPSC_HYBRID_SECRET_ENV or OPSC_HYBRID_PROFILE_ID/OPSC_HYBRID_CHANNEL_ID"
-  ]
+  "inputs": [
+    {
+      "productTitle": "羽川翼抱枕 Phase11 Smoke",
+      "theme": "物语系列",
+      "character": "羽川翼",
+      "style": "clean ecommerce product image"
+    }
+  ],
+  "productConcurrency": 1,
+  "maxRetries": 0
 }
 ```
 
-### Smoke Helper Local Orchestration Check
+Command shape：
 
-为了确认 helper 不再默认传不存在的 `default/vps` profile/channel，并且能按 `opsc` JSON envelope 正确统计 artifact，本地用临时 fake `opsc` 复测完整编排链路。该检查不接触 workspace 文件，不调用 VPS API。
+```bash
+OPSC_HYBRID_VPS_TOKEN=<redacted> \
+OPSC_HYBRID_VPS_URL=http://127.0.0.1:18180 \
+OPSC_HYBRID_REMOTE_TEMPLATE_ID=workflow-template-381c428b-fc1c-43b4-9b2f-7ce885e3e29e \
+OPSC_BIN=/tmp/opsc-phase11 \
+python3 tools/hybrid_ecommerce_vps_smoke.py \
+  --workspace <tmp-workspace> \
+  --input-file <tmp-input.json> \
+  --evidence <tmp-evidence.json> \
+  --timeout 1800
+```
 
-Observed redacted summary:
+Observed redacted summary：
 
 ```json
 {
   "workspace": "<redacted>",
-  "remoteUrl": "http://92.9.225.98:18080",
-  "remoteTemplateId": "remote_tpl_placeholder",
+  "remoteUrl": "http://127.0.0.1:18180",
+  "remoteTemplateId": "workflow-template-381c428b-fc1c-43b4-9b2f-7ce885e3e29e",
   "profile": "",
   "channel": "",
   "secretEnv": "OPSC_HYBRID_VPS_TOKEN",
   "credentialSource": "envSecretRef",
   "ok": true,
-  "templateId": "tpl_fake",
-  "runId": "run_fake",
+  "templateId": "tpl_01KSWZBMGT7TN7A0PMV137XA93",
+  "runId": "run_01KSWZBMRTMT9V5H8MB9BEBK2C",
   "runStatus": "success",
-  "artifactCount": 1,
+  "artifactCount": 5,
   "executorProcessed": 1
 }
 ```
 
-## Future Retest Command
+Final local status summary：
 
-拿到可达 VPS API、真实 admin credential 和已确认 remote template id 后，执行：
-
-```bash
-export OPSC_HYBRID_VPS_URL=http://92.9.225.98:18080
-export OPSC_HYBRID_REMOTE_TEMPLATE_ID=<confirmed_template_id>
-export OPSC_HYBRID_VPS_TOKEN=<admin_token>
-
-tools/hybrid_ecommerce_vps_smoke.py \
-  --workspace ~/OpsCanvas \
-  --input-file /path/to/hybrid-input.json \
-  --evidence /tmp/opsc-phase11-vps-smoke.json
+```json
+{
+  "run": "run_01KSWZBMRTMT9V5H8MB9BEBK2C",
+  "status": "success",
+  "artifactCount": 5,
+  "latestEventSequence": 274
+}
 ```
 
-也可以显式传参：
+Sanitized remote log tail：
 
-```bash
-tools/hybrid_ecommerce_vps_smoke.py \
-  --workspace ~/OpsCanvas \
-  --remote-url http://92.9.225.98:18080 \
-  --remote-template <confirmed_template_id> \
-  --secret-env OPSC_HYBRID_VPS_TOKEN \
-  --input-file /path/to/hybrid-input.json \
-  --evidence /tmp/opsc-phase11-vps-smoke.json
+```text
+node completed product=羽川翼抱枕 Phase11 Smoke node=source files=1
+node completed product=羽川翼抱枕 Phase11 Smoke node=mockup files=1
+node completed product=羽川翼抱枕 Phase11 Smoke node=main files=1
+node completed product=羽川翼抱枕 Phase11 Smoke node=package files=1
+node completed product=羽川翼抱枕 Phase11 Smoke node=sync_local files=1
+product completed key=羽川翼抱枕 Phase11 Smoke
+run completed products=1 duration=1744.8s
 ```
 
-验收标准：
+Artifact sample：
 
-- helper 输出 `ok: true`。
-- evidence 中 `runStatus` 为 `success`。
-- `artifactCount` 大于 `0`。
-- workspace canonical `runs/<run_id>/` 只保存 run、node state、events 和 artifact refs。
-- canonical artifact metadata 位于 `artifacts/<art_id>/artifact.json`。
-- evidence、CLI 输出和 workspace JSON 不包含 token、workspace 绝对路径、远端 `runDir` 或 secret 文件路径。
+```json
+{
+  "artifact": {
+    "id": "art_01KSX117CPH48SZ4T3MPYGQM82",
+    "type": "image",
+    "mime": "image/png",
+    "title": "output_01.png",
+    "bytes": 1046120,
+    "width": 1024,
+    "height": 1536,
+    "privacy": "private",
+    "original": "files/original.png"
+  },
+  "ref": {
+    "artifactId": "art_01KSX117CPH48SZ4T3MPYGQM82",
+    "role": "primary_output",
+    "nodeId": "reference",
+    "slot": "artifact"
+  }
+}
+```
+
+## Remaining Manual Checks
+
+- 仍需在真实 Web UI 中用 local workspace 连接入口发起同一个 hybrid template run，确认浏览器只连 `opsc serve`，不保存 VPS token/cookie/secret。
+- 仍需在真实长期 workspace 中确认 artifact 预览、刷新后 run status 回显、失败错误展示和断开本地工作区后的提示。
+- 真实模型调用已证明可完成一条最小链路，但耗时接近 30 分钟，后续产品化需要补 watch/worker 体验和更细粒度远端事件同步。

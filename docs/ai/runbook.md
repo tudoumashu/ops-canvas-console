@@ -137,13 +137,19 @@ go run ./cmd/opsc mcp --workspace ~/OpsCanvas
 
 `opsc mcp` 是本地 agent 的 stdio MCP server。开发期可直接用 `go run ./cmd/opsc mcp --workspace ~/OpsCanvas`，实际配置 Codex / Claude Code 等 MCP client 时建议先构建 `opsc` 二进制，再把 command 指向该二进制并传 `["mcp", "--workspace", "/home/<user>/OpsCanvas"]`。首版工具只做 workspace 查询、doctor、index rebuild、export/GC dry-run、template/run/artifact/profile/project/asset/prompt 列表和 run status/events；不暴露 canonical object 写入工具、不暴露 `run events --follow`，默认不输出 secrets、workspace 绝对路径或 project `rootPath`。`opsc_workspace_info` 默认只保留 `runtime.active`，不输出 `runtime.baseUrl`、`runtime.host`、`runtime.port` 或可重建本地 serve URL 的字段。`opsc_workspace_index_rebuild` 是唯一维护写工具，调用前必须先启动同一 workspace 的 `opsc serve`；该工具只从 runtime state 读取相对 `bearer.token` 并调用 loopback `/api/local/workspace/index/rebuild`，不会把 token、token 文件路径或 serve URL 写入 MCP 输出。
 
-`opsc executor` 是当前唯一正式本地 workflow executor 入口。开发期可直接用 `go run ./cmd/opsc executor --workspace ~/OpsCanvas`，也可加 `--run <run_id>` 限定单个 run。它只处理带 `run.waiting_for_executor` 的 pending run 或已由 executor 接管的 running run；支持固定本地素材 `material_lookup`、`text_generation`、`image_generation` 和最小 `input/text_static` 辅助节点。模型调用通过 workspace profile 的 `secretRef` 解析 env/file secret，不从浏览器读取 API key，也不迁移 PDD/VPS run。
+`opsc executor` 是当前唯一正式本地 workflow executor 入口。开发期可直接用 `go run ./cmd/opsc executor --workspace ~/OpsCanvas`，也可加 `--run <run_id>` 限定单个 run。它只处理带 `run.waiting_for_executor` 的 pending run 或已由 executor 接管的 running run；支持固定本地素材 `material_lookup`、`text_generation`、`image_generation`、最小 `input/text_static` 辅助节点，以及单条已确认电商模板的 hybrid VPS backend。模型调用通过 workspace profile 的 `secretRef` 解析 env/file secret，不从浏览器读取 API key，也不迁移 PDD/VPS run。
 
-Hybrid ecommerce VPS smoke：
+Hybrid ecommerce VPS smoke。当前已确认 VPS `96.9.225.98` 的应用 API 在 VPS 本机 `127.0.0.1:18080`，从本机测试时先建立 SSH tunnel：
 
 ```bash
-export OPSC_HYBRID_VPS_URL=http://92.9.225.98:18080
-export OPSC_HYBRID_REMOTE_TEMPLATE_ID=<confirmed_template_id>
+ssh -N -L 127.0.0.1:18180:127.0.0.1:18080 -p 443 root@96.9.225.98
+```
+
+另一个终端执行：
+
+```bash
+export OPSC_HYBRID_VPS_URL=http://127.0.0.1:18180
+export OPSC_HYBRID_REMOTE_TEMPLATE_ID=workflow-template-381c428b-fc1c-43b4-9b2f-7ce885e3e29e
 export OPSC_HYBRID_VPS_TOKEN=<admin_token>
 
 tools/hybrid_ecommerce_vps_smoke.py \
@@ -159,8 +165,8 @@ tools/hybrid_ecommerce_vps_smoke.py \
 ```bash
 tools/hybrid_ecommerce_vps_smoke.py \
   --workspace ~/OpsCanvas \
-  --remote-url http://92.9.225.98:18080 \
-  --remote-template <confirmed_template_id> \
+  --remote-url http://127.0.0.1:18180 \
+  --remote-template workflow-template-381c428b-fc1c-43b4-9b2f-7ce885e3e29e \
   --profile <profile_id> \
   --channel <channel_id> \
   --input-file /path/to/hybrid-input.json \

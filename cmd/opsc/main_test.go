@@ -522,6 +522,57 @@ func TestEcommerceImportTemplateCommandJSONRedactsSecretAndPath(t *testing.T) {
 	}
 }
 
+func TestEcommerceImportTemplateCommandSupportsDirectEnvGoldenPath(t *testing.T) {
+	t.Setenv("OPSC_HYBRID_CLI_TOKEN", "cli-remote-secret")
+	root := filepath.Join(t.TempDir(), "workspace")
+	result, err := localworkspace.Init(localworkspace.InitOptions{Path: root, Name: "Hybrid Direct Workspace"})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	workspace := result.Workspace
+	var gotAuth string
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet || r.URL.Path != "/api/admin/workflows/pdd/templates/remote_tpl" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, `{"code":0,"data":{"id":"remote_tpl","workflowType":"pdd","title":"Direct Env Ecommerce","spec":{"version":1,"nodes":[{"id":"stage_generate","title":"Generate","type":"image","operation":"image_generation"}],"edges":[],"settings":{"productConcurrency":1,"maxRetries":0}},"updatedAt":"2026-01-02T03:04:05Z"},"msg":"ok"}`)
+	}))
+	defer remote.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"ecommerce", "import-template", "--workspace", root, "--remote-url", remote.URL, "--remote-template", "remote_tpl", "--secret-env", "OPSC_HYBRID_CLI_TOKEN", "--json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("ecommerce import-template exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %s, want empty", stderr.String())
+	}
+	if gotAuth != "Bearer cli-remote-secret" {
+		t.Fatalf("auth = %q, want env bearer", gotAuth)
+	}
+	for _, want := range []string{`"ok": true`, `"remoteTemplateId": "remote_tpl"`, `"title": "Direct Env Ecommerce"`, `"sourceFingerprint": "sha256:`, `"importedAt":`} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	for _, secret := range []string{root, "cli-remote-secret"} {
+		if strings.Contains(stdout.String(), secret) || strings.Contains(stderr.String(), secret) {
+			t.Fatalf("CLI output leaked %q:\nstdout=%s\nstderr=%s", secret, stdout.String(), stderr.String())
+		}
+	}
+	templates, err := localworkspace.ListTemplates(workspace)
+	if err != nil {
+		t.Fatalf("ListTemplates() error = %v", err)
+	}
+	if len(templates) != 1 {
+		t.Fatalf("templates = %#v, want imported template", templates)
+	}
+}
+
 func TestServeCommandJSONOutputsRuntimeWithoutToken(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
 	root := filepath.Join(t.TempDir(), "workspace")

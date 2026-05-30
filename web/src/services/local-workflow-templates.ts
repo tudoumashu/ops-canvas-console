@@ -37,6 +37,7 @@ export async function saveLocalPDDWorkflowTemplate(baseUrl: string, template: Pa
     const data = workflowTemplateToLocalData(template);
     if (template.id) {
         const current = await getLocalTemplate(baseUrl, template.id);
+        preserveLocalTemplateHybridMetadata(data, current.data);
         return workflowTemplateFromLocalDocument(await updateLocalTemplate(baseUrl, template.id, template.revision || current.revision, data));
     }
     return workflowTemplateFromLocalDocument(await createLocalTemplate(baseUrl, data));
@@ -238,6 +239,23 @@ function workflowTemplateToLocalData(template: Partial<WorkflowTemplate>): Local
         settings: { ...(spec.settings || {}) },
         metadata: { source: "web-ui" },
     };
+}
+
+function preserveLocalTemplateHybridMetadata(next: LocalTemplateData, current: LocalTemplateData) {
+    const hybrid = current.metadata?.hybridEcommerce;
+    if (hybrid && typeof hybrid === "object") {
+        next.metadata = {
+            ...(next.metadata || {}),
+            hybridEcommerce: hybrid,
+        };
+    }
+    const settingsHybrid = current.settings?.hybridEcommerce;
+    if (settingsHybrid && typeof settingsHybrid === "object") {
+        next.settings = {
+            ...(next.settings || {}),
+            hybridEcommerce: settingsHybrid,
+        };
+    }
 }
 
 function localSpecFromData(data: LocalTemplateData): WorkflowTemplateSpec {

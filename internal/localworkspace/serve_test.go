@@ -391,6 +391,9 @@ func TestServeLocalObjectWritesAndSanitization(t *testing.T) {
 		t.Fatalf("run create status=%d body=%s", status, body)
 	}
 	runID := jsonPathString(t, body, "data.id")
+	if _, err := os.Stat(filepath.Join(root, "runs", runID, "template.snapshot.json")); err != nil {
+		t.Fatalf("serve run template snapshot missing: %v", err)
+	}
 	status, body = serveRequest(t, http.MethodGet, runtime.BaseURL+"/api/local/runs/"+runID, token, "", nil, nil)
 	if status != http.StatusOK || !strings.Contains(body, `"templateId":`+strconvQuote(templateID)) {
 		t.Fatalf("run get status=%d body=%s", status, body)
