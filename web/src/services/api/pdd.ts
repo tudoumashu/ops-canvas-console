@@ -317,6 +317,8 @@ export type StartWorkflowTemplateRunRequest = {
     inputs: Array<Record<string, unknown>>;
     productConcurrency?: number;
     maxRetries?: number;
+    profileId?: string;
+    projectId?: string;
 };
 
 export type StartWorkflowTemplateRunResult = {

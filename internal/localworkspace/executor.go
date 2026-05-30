@@ -17,6 +17,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	osexec "os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -33,6 +34,8 @@ const (
 	executorEventNodeStarted   = "executor.node.started"
 	executorEventNodeCompleted = "executor.node.completed"
 	executorEventNodeFailed    = "executor.node.failed"
+	executorEventNodeRetrying  = "executor.node.retrying"
+	executorEventNodeSkipped   = "executor.node.skipped"
 	executorEventRunCompleted  = "executor.run.completed"
 	executorEventRunFailed     = "executor.run.failed"
 )
@@ -63,28 +66,46 @@ type ExecutorRunResult struct {
 }
 
 type executorNode struct {
-	ID        string         `json:"id"`
-	Type      string         `json:"type"`
-	Title     string         `json:"title"`
-	Operation string         `json:"operation"`
-	Model     string         `json:"model"`
-	Prompt    string         `json:"prompt"`
-	Count     int            `json:"count"`
-	Size      string         `json:"size"`
-	Quality   string         `json:"quality"`
-	Extra     map[string]any `json:"extra"`
+	ID             string                  `json:"id"`
+	Type           string                  `json:"type"`
+	Title          string                  `json:"title"`
+	Operation      string                  `json:"operation"`
+	Model          string                  `json:"model"`
+	Prompt         string                  `json:"prompt"`
+	Count          int                     `json:"count"`
+	Size           string                  `json:"size"`
+	Quality        string                  `json:"quality"`
+	Retry          *executorRetry          `json:"retry,omitempty"`
+	Extra          map[string]any          `json:"extra"`
+	OutputMappings []executorOutputMapping `json:"outputMappings,omitempty"`
+}
+
+type executorRetry struct {
+	Enabled         *bool `json:"enabled,omitempty"`
+	RetryCount      int   `json:"retryCount,omitempty"`
+	IntervalSeconds int   `json:"intervalSeconds,omitempty"`
+}
+
+type executorOutputMapping struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
 }
 
 type executorEdge struct {
-	ID   string `json:"id"`
-	From string `json:"from"`
-	To   string `json:"to"`
+	ID         string         `json:"id"`
+	From       string         `json:"from"`
+	To         string         `json:"to"`
+	Source     string         `json:"source,omitempty"`
+	Target     string         `json:"target,omitempty"`
+	FromHandle string         `json:"fromHandle,omitempty"`
+	Condition  map[string]any `json:"condition,omitempty"`
 }
 
 type executorContext struct {
 	workspace Workspace
 	run       Envelope[RunData]
 	template  Envelope[TemplateData]
+	project   *Envelope[ProjectData]
 	input     map[string]any
 	nodeOut   map[string]map[string]any
 	client    *http.Client
@@ -209,10 +230,15 @@ func executeLocalRun(ctx context.Context, workspace Workspace, run Envelope[RunD
 	if err != nil {
 		return runResult, err
 	}
+	project, err := executorProject(workspace, run)
+	if err != nil {
+		return failRunResult(workspace, run, runResult, err)
+	}
 	execCtx := executorContext{
 		workspace: workspace,
 		run:       run,
 		template:  template,
+		project:   project,
 		input:     executorRunInput(run.Data.Input),
 		nodeOut:   executorNodeOutputMap(states),
 		client:    opts.HTTPClient,
@@ -242,6 +268,28 @@ func executeLocalRun(ctx context.Context, workspace Workspace, run Envelope[RunD
 			err := errors.New("upstream node failed")
 			return failNodeAndRunResult(workspace, run, runResult, node, err, current)
 		}
+		if skipped, reason := conditionRouteSkipped(states, edges, node.ID); skipped {
+			finishedAt := executorNow(execCtx.now)
+			output := map[string]any{"skipped": true, "reason": reason}
+			success, err := writeExecutorNodeState(workspace, run.ID, current, RunNodeStateData{
+				NodeID:     node.ID,
+				Status:     RunStatusSuccess,
+				StartedAt:  finishedAt,
+				FinishedAt: finishedAt,
+				Output:     output,
+				Metadata:   executorNodeMetadata(node),
+			})
+			if err != nil {
+				return runResult, err
+			}
+			states[node.ID] = success
+			execCtx.nodeOut[node.ID] = output
+			runResult.Skipped++
+			if _, err := appendExecutorEvent(workspace, run.ID, executorEventNodeSkipped, "info", "Node skipped", map[string]any{"nodeId": node.ID, "operation": node.Operation, "reason": reason}); err != nil {
+				return runResult, err
+			}
+			continue
+		}
 		if dependencyPending(states, edges, node.ID) {
 			err := errors.New("upstream node is not ready")
 			return failNodeAndRunResult(workspace, run, runResult, node, err, current)
@@ -260,7 +308,7 @@ func executeLocalRun(ctx context.Context, workspace Workspace, run Envelope[RunD
 		if _, err := appendExecutorEvent(workspace, run.ID, executorEventNodeStarted, "info", "Node started", map[string]any{"nodeId": node.ID, "operation": node.Operation}); err != nil {
 			return runResult, err
 		}
-		output, err := executeLocalNode(ctx, execCtx, node, runResult.Executed)
+		output, err := executeLocalNodeWithRetry(ctx, execCtx, node, runResult.Executed)
 		if err != nil {
 			return failNodeAndRunResult(workspace, run, runResult, node, err, running)
 		}
@@ -316,6 +364,39 @@ func readExecutorTemplate(workspace Workspace, run Envelope[RunData]) (Envelope[
 	return ReadTemplate(workspace, run.Data.TemplateID)
 }
 
+func executorProject(workspace Workspace, run Envelope[RunData]) (*Envelope[ProjectData], error) {
+	projectID := strings.TrimSpace(run.Data.ProjectID)
+	if projectID == "" {
+		return nil, nil
+	}
+	project, err := ReadProject(workspace, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateExecutorProjectAdapter(project.Data.Adapter); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(project.Data.RootPath) != "" && strings.TrimSpace(project.Data.RootFingerprint) != "" {
+		current, err := ProjectRootFingerprint(workspace, project.Data.RootPath)
+		if err != nil {
+			return nil, redactExecutorProjectError(project, err)
+		}
+		if current != project.Data.RootFingerprint {
+			return nil, NewError(ErrorWorkspaceInvalid, "project root fingerprint changed", 2, map[string]string{"projectId": project.ID})
+		}
+	}
+	return &project, nil
+}
+
+func validateExecutorProjectAdapter(adapter string) error {
+	switch strings.TrimSpace(adapter) {
+	case "", "filesystem", "generic", "article-local", "video-local", "pdd-local":
+		return nil
+	default:
+		return NewError(ErrorWorkspaceInvalid, "project adapter is not supported by local executor", 2, map[string]string{"adapter": adapter})
+	}
+}
+
 func parseExecutorNodes(rawNodes []json.RawMessage) ([]executorNode, error) {
 	nodes := make([]executorNode, 0, len(rawNodes))
 	seen := map[string]bool{}
@@ -362,6 +443,13 @@ func parseExecutorEdges(rawEdges []json.RawMessage) ([]executorEdge, error) {
 		}
 		edge.From = strings.TrimSpace(edge.From)
 		edge.To = strings.TrimSpace(edge.To)
+		if edge.From == "" {
+			edge.From = strings.TrimSpace(edge.Source)
+		}
+		if edge.To == "" {
+			edge.To = strings.TrimSpace(edge.Target)
+		}
+		edge.FromHandle = strings.TrimSpace(edge.FromHandle)
 		if edge.From == "" || edge.To == "" {
 			continue
 		}
@@ -418,7 +506,7 @@ func executeLocalNode(ctx context.Context, execCtx executorContext, node executo
 		return map[string]any{"input": execCtx.input}, nil
 	case "text_static":
 		text := renderExecutorPrompt(node.Prompt, execCtx.input, execCtx.nodeOut)
-		artifact, err := createExecutorArtifact(execCtx.workspace, execCtx.run.ID, node.ID, "text", "text/plain; charset=utf-8", nonEmptyString(node.Title, node.ID), []byte(text), "output", "text", order, map[string]any{
+		artifact, err := createExecutorArtifactForNode(execCtx, node.ID, "text", "text/plain; charset=utf-8", nonEmptyString(node.Title, node.ID), []byte(text), "output", "text", order, map[string]any{
 			"type":       "text_static",
 			"templateId": execCtx.template.ID,
 			"nodeId":     node.ID,
@@ -426,9 +514,14 @@ func executeLocalNode(ctx context.Context, execCtx executorContext, node executo
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"text": text, "artifactIds": []string{artifact.ID}, "artifactId": artifact.ID}, nil
+		output := map[string]any{"text": text, "artifactIds": []string{artifact.ID}, "artifactId": artifact.ID}
+		return applyProjectOutputMappings(execCtx, node, output, []executorGeneratedFile{{Name: "text", Data: []byte(text), MIME: "text/plain; charset=utf-8"}})
 	case "material_lookup":
 		return executeMaterialLookup(execCtx, node, order)
+	case "condition":
+		return executeCondition(execCtx, node), nil
+	case "script":
+		return executeProjectScript(ctx, execCtx, node, order)
 	case "text_generation":
 		return executeTextGeneration(ctx, execCtx, node, order)
 	case "image_generation":
@@ -436,6 +529,79 @@ func executeLocalNode(ctx context.Context, execCtx executorContext, node executo
 	default:
 		return nil, NewError(ErrorWorkspaceInvalid, "local executor does not support node operation", 2, map[string]string{"nodeId": node.ID, "operation": node.Operation})
 	}
+}
+
+func executeLocalNodeWithRetry(ctx context.Context, execCtx executorContext, node executorNode, order int) (map[string]any, error) {
+	retry := normalizedExecutorRetry(node.Retry)
+	attempt := 0
+	for {
+		output, err := executeLocalNode(ctx, execCtx, node, order)
+		if err == nil {
+			if attempt > 0 {
+				output["retryAttempts"] = attempt
+			}
+			return output, nil
+		}
+		if !retry.Enabled || (retry.RetryCount > 0 && attempt >= retry.RetryCount) {
+			return nil, err
+		}
+		attempt++
+		delay := executorRetryDelay(retry.IntervalSeconds, attempt)
+		if _, eventErr := appendExecutorEvent(execCtx.workspace, execCtx.run.ID, executorEventNodeRetrying, "warn", "Node retrying", map[string]any{
+			"nodeId":    node.ID,
+			"operation": node.Operation,
+			"attempt":   attempt,
+			"error":     redactExecutorError(execCtx, err),
+		}); eventErr != nil {
+			return nil, eventErr
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+type executorRetryConfig struct {
+	Enabled         bool
+	RetryCount      int
+	IntervalSeconds int
+}
+
+func normalizedExecutorRetry(retry *executorRetry) executorRetryConfig {
+	if retry == nil {
+		return executorRetryConfig{}
+	}
+	enabled := true
+	if retry.Enabled != nil {
+		enabled = *retry.Enabled
+	}
+	count := retry.RetryCount
+	if count < 0 {
+		count = 0
+	}
+	interval := retry.IntervalSeconds
+	if interval < 0 {
+		interval = 0
+	}
+	return executorRetryConfig{Enabled: enabled, RetryCount: count, IntervalSeconds: interval}
+}
+
+func executorRetryDelay(intervalSeconds int, attempt int) time.Duration {
+	if intervalSeconds > 0 {
+		return time.Duration(intervalSeconds) * time.Second
+	}
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := time.Duration(100*(1<<min(attempt-1, 5))) * time.Millisecond
+	if delay > 2*time.Second {
+		return 2 * time.Second
+	}
+	return delay
 }
 
 func executeMaterialLookup(execCtx executorContext, node executorNode, order int) (map[string]any, error) {
@@ -465,7 +631,7 @@ func executeMaterialLookup(execCtx executorContext, node executorNode, order int
 	}
 	mimeType := nonEmptyString(asset.Data.MIME, mime.TypeByExtension(filepath.Ext(filePath)))
 	mimeType = nonEmptyString(mimeType, "image/png")
-	artifact, err := createExecutorArtifact(execCtx.workspace, execCtx.run.ID, node.ID, "image", mimeType, nonEmptyString(asset.Data.Title, nonEmptyString(node.Title, assetID)), data, "input", "material", order, map[string]any{
+	artifact, err := createExecutorArtifactForNode(execCtx, node.ID, "image", mimeType, nonEmptyString(asset.Data.Title, nonEmptyString(node.Title, assetID)), data, "input", "material", order, map[string]any{
 		"type":       "local_asset",
 		"assetId":    assetID,
 		"templateId": execCtx.template.ID,
@@ -498,7 +664,7 @@ func executeTextGeneration(ctx context.Context, execCtx executorContext, node ex
 	if err != nil {
 		return nil, err
 	}
-	artifact, err := createExecutorArtifact(execCtx.workspace, execCtx.run.ID, node.ID, "text", "text/plain; charset=utf-8", nonEmptyString(node.Title, "Generated text"), []byte(text), "primary_output", "text", order, map[string]any{
+	artifact, err := createExecutorArtifactForNode(execCtx, node.ID, "text", "text/plain; charset=utf-8", nonEmptyString(node.Title, "Generated text"), []byte(text), "primary_output", "text", order, map[string]any{
 		"type":       "text_generation",
 		"model":      model,
 		"templateId": execCtx.template.ID,
@@ -507,7 +673,16 @@ func executeTextGeneration(ctx context.Context, execCtx executorContext, node ex
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"text": text, "model": model, "artifactIds": []string{artifact.ID}, "artifactId": artifact.ID}, nil
+	output := map[string]any{"text": text, "model": model, "artifactIds": []string{artifact.ID}, "artifactId": artifact.ID}
+	if parsed, ok := parseExecutorJSONObject([]byte(text)); ok {
+		output["json"] = parsed
+		for key, value := range parsed {
+			if _, exists := output[key]; !exists {
+				output[key] = value
+			}
+		}
+	}
+	return applyProjectOutputMappings(execCtx, node, output, []executorGeneratedFile{{Name: "text", Data: []byte(text), MIME: "text/plain; charset=utf-8"}})
 }
 
 func executeImageGeneration(ctx context.Context, execCtx executorContext, node executorNode, order int) (map[string]any, error) {
@@ -542,7 +717,7 @@ func executeImageGeneration(ctx context.Context, execCtx executorContext, node e
 	}
 	artifactIDs := make([]string, 0, len(images))
 	for i, imageData := range images {
-		artifact, err := createExecutorArtifact(execCtx.workspace, execCtx.run.ID, node.ID, "image", "image/png", nonEmptyString(node.Title, "Generated image"), imageData, "primary_output", "image", order+i, map[string]any{
+		artifact, err := createExecutorArtifactForNode(execCtx, node.ID, "image", "image/png", nonEmptyString(node.Title, "Generated image"), imageData, "primary_output", "image", order+i, map[string]any{
 			"type":       "image_generation",
 			"model":      model,
 			"templateId": execCtx.template.ID,
@@ -554,7 +729,239 @@ func executeImageGeneration(ctx context.Context, execCtx executorContext, node e
 		}
 		artifactIDs = append(artifactIDs, artifact.ID)
 	}
-	return map[string]any{"artifactIds": artifactIDs, "model": model, "count": len(artifactIDs)}, nil
+	output := map[string]any{"artifactIds": artifactIDs, "model": model, "count": len(artifactIDs)}
+	if len(images) > 0 {
+		return applyProjectOutputMappings(execCtx, node, output, []executorGeneratedFile{{Name: "image", Data: images[0], MIME: "image/png"}})
+	}
+	return output, nil
+}
+
+func executeCondition(execCtx executorContext, node executorNode) map[string]any {
+	context := executorConditionContext(execCtx)
+	rules := executorConditionRules(node.Extra["conditions"])
+	for _, rule := range rules {
+		if conditionRuleMatches(context, rule) {
+			decision := strings.TrimSpace(rule.Output)
+			if decision == "" {
+				decision = stringifyTemplateValue(rule.Value)
+			}
+			if decision == "" {
+				decision = "matched"
+			}
+			return map[string]any{
+				"decision": decision,
+				"output":   decision,
+				"matched":  true,
+			}
+		}
+	}
+	defaultDecision := firstNonEmptyString(stringFromMap(node.Extra, "defaultDecision"), stringFromMap(node.Extra, "defaultOutput"), "default")
+	return map[string]any{
+		"decision": defaultDecision,
+		"output":   defaultDecision,
+		"matched":  false,
+	}
+}
+
+func executeProjectScript(ctx context.Context, execCtx executorContext, node executorNode, order int) (map[string]any, error) {
+	if execCtx.project == nil {
+		return nil, NewError(ErrorWorkspaceInvalid, "script node requires run projectId", 2, map[string]string{"nodeId": node.ID})
+	}
+	if err := validateExecutorProjectAdapter(execCtx.project.Data.Adapter); err != nil {
+		return nil, err
+	}
+	executorMode := stringFromMap(node.Extra, "executor")
+	switch executorMode {
+	case "", "local", "project", "filesystem":
+	default:
+		return nil, NewError(ErrorWorkspaceInvalid, "script executor mode is not supported by local executor", 2, map[string]string{"nodeId": node.ID, "executor": executorMode})
+	}
+	scriptPath := firstNonEmptyString(stringFromMap(node.Extra, "scriptPath"), stringFromMap(node.Extra, "path"), stringFromMap(node.Extra, "command"))
+	if scriptPath == "" {
+		return nil, NewError(ErrorWorkspaceInvalid, "scriptPath is required for script node", 2, map[string]string{"nodeId": node.ID})
+	}
+	resolved, err := resolveExecutorProjectPath(execCtx, ProjectPathExec, scriptPath)
+	if err != nil {
+		return nil, err
+	}
+	args := renderExecutorArgs(node, execCtx, stringSliceFromMap(node.Extra, "args"))
+	root, err := executorProjectRoot(execCtx)
+	if err != nil {
+		return nil, err
+	}
+	command := osexec.CommandContext(ctx, resolved.Path, args...)
+	command.Dir = root
+	command.Env = executorProcessEnv(execCtx, node)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	runErr := command.Run()
+	redactedStdout := redactExecutorText(execCtx, stdout.String())
+	redactedStderr := redactExecutorText(execCtx, stderr.String())
+	if runErr != nil {
+		return nil, NewError(ErrorWorkspaceInvalid, "project script failed", 2, map[string]any{
+			"nodeId":   node.ID,
+			"exitCode": executorExitCode(runErr),
+			"stderr":   truncateExecutorText(redactedStderr),
+		})
+	}
+
+	output := map[string]any{
+		"stdout":       truncateExecutorText(redactedStdout),
+		"stderr":       truncateExecutorText(redactedStderr),
+		"exitCode":     0,
+		"relativePath": resolved.RelativePath,
+	}
+	if parsed, ok := parseExecutorJSONObject(stdout.Bytes()); ok {
+		output["json"] = parsed
+		for key, value := range parsed {
+			if _, exists := output[key]; !exists {
+				output[key] = value
+			}
+		}
+	}
+	if executorArtifactWriteAllowed(execCtx) && len(stdout.Bytes()) > 0 {
+		artifact, err := createExecutorArtifactForNode(execCtx, node.ID, "text", "text/plain; charset=utf-8", nonEmptyString(node.Title, "Script output"), []byte(redactedStdout), "primary_output", "stdout", order, map[string]any{
+			"type":       "script",
+			"templateId": execCtx.template.ID,
+			"nodeId":     node.ID,
+		})
+		if err != nil {
+			return nil, err
+		}
+		output["artifactIds"] = []string{artifact.ID}
+		output["artifactId"] = artifact.ID
+	}
+	return applyProjectOutputMappings(execCtx, node, output, []executorGeneratedFile{{Name: "stdout", Data: stdout.Bytes(), MIME: "text/plain; charset=utf-8"}})
+}
+
+func createExecutorArtifactForNode(execCtx executorContext, nodeID string, artifactType string, mimeType string, title string, data []byte, role string, slot string, order int, source map[string]any) (Envelope[ArtifactData], error) {
+	if err := requireExecutorArtifactWrite(execCtx); err != nil {
+		return Envelope[ArtifactData]{}, err
+	}
+	return createExecutorArtifact(execCtx.workspace, execCtx.run.ID, nodeID, artifactType, mimeType, title, data, role, slot, order, source)
+}
+
+type executorGeneratedFile struct {
+	Name string
+	Data []byte
+	MIME string
+}
+
+func applyProjectOutputMappings(execCtx executorContext, node executorNode, output map[string]any, files []executorGeneratedFile) (map[string]any, error) {
+	mappings := executorProjectOutputMappings(node)
+	if len(mappings) == 0 {
+		return output, nil
+	}
+	if execCtx.project == nil {
+		return nil, NewError(ErrorWorkspaceInvalid, "project output mapping requires run projectId", 2, map[string]string{"nodeId": node.ID})
+	}
+	written := make([]map[string]any, 0, len(mappings))
+	for _, mapping := range mappings {
+		file, ok := selectExecutorGeneratedFile(files, mapping.Kind)
+		if !ok {
+			return nil, NewError(ErrorWorkspaceInvalid, "project output mapping has no matching output", 2, map[string]string{"nodeId": node.ID, "kind": mapping.Kind})
+		}
+		rel, err := writeExecutorProjectFile(execCtx, mapping.Path, file.Data)
+		if err != nil {
+			return nil, err
+		}
+		written = append(written, map[string]any{
+			"path":  rel,
+			"kind":  firstNonEmptyString(mapping.Kind, file.Name),
+			"bytes": len(file.Data),
+		})
+	}
+	output["projectOutputs"] = written
+	return output, nil
+}
+
+func executorProjectOutputMappings(node executorNode) []executorOutputMapping {
+	mappings := make([]executorOutputMapping, 0, len(node.OutputMappings)+3)
+	for _, mapping := range node.OutputMappings {
+		pathValue := strings.TrimSpace(mapping.Path)
+		if pathValue != "" {
+			mappings = append(mappings, executorOutputMapping{Path: pathValue, Kind: strings.TrimSpace(mapping.Kind)})
+		}
+	}
+	for _, key := range []string{"outputPath", "projectOutputPath"} {
+		if pathValue := stringFromMap(node.Extra, key); pathValue != "" {
+			mappings = append(mappings, executorOutputMapping{Path: pathValue, Kind: stringFromMap(node.Extra, "outputKind")})
+		}
+	}
+	for _, item := range anySliceFromMap(node.Extra, "projectOutputs") {
+		m, ok := asStringAnyMap(item)
+		if !ok {
+			continue
+		}
+		pathValue := strings.TrimSpace(fmt.Sprint(m["path"]))
+		if pathValue == "" {
+			continue
+		}
+		kind := strings.TrimSpace(fmt.Sprint(firstNonNil(m["kind"], m["from"])))
+		mappings = append(mappings, executorOutputMapping{Path: pathValue, Kind: kind})
+	}
+	return mappings
+}
+
+func selectExecutorGeneratedFile(files []executorGeneratedFile, kind string) (executorGeneratedFile, bool) {
+	kind = strings.TrimSpace(kind)
+	if kind != "" {
+		for _, file := range files {
+			if file.Name == kind || strings.HasPrefix(file.MIME, kind+"/") || strings.Contains(file.MIME, kind) {
+				return file, true
+			}
+		}
+	}
+	if len(files) == 0 {
+		return executorGeneratedFile{}, false
+	}
+	return files[0], true
+}
+
+func writeExecutorProjectFile(execCtx executorContext, relPath string, data []byte) (string, error) {
+	resolved, err := resolveExecutorProjectPath(execCtx, ProjectPathWrite, relPath)
+	if err != nil {
+		return "", err
+	}
+	if err := AtomicWriteFile(resolved.Path, data, 0o600); err != nil {
+		return "", redactExecutorProjectError(*execCtx.project, err)
+	}
+	return resolved.RelativePath, nil
+}
+
+func resolveExecutorProjectPath(execCtx executorContext, operation ProjectPathOperation, relPath string) (ProjectPathResult, error) {
+	if execCtx.project == nil {
+		return ProjectPathResult{}, NewError(ErrorWorkspaceInvalid, "run projectId is required", 2, nil)
+	}
+	result, err := ResolveProjectPath(execCtx.workspace, *execCtx.project, ProjectPathRequest{Operation: operation, Path: relPath})
+	if err != nil {
+		return ProjectPathResult{}, redactExecutorProjectError(*execCtx.project, err)
+	}
+	return result, nil
+}
+
+func executorProjectRoot(execCtx executorContext) (string, error) {
+	if execCtx.project == nil {
+		return "", NewError(ErrorWorkspaceInvalid, "run projectId is required", 2, nil)
+	}
+	root, err := filepath.EvalSymlinks(execCtx.project.Data.RootPath)
+	if err != nil {
+		return "", redactExecutorProjectError(*execCtx.project, WrapError(ErrorWorkspaceInvalid, "resolve project root symlinks", 2, err))
+	}
+	return root, nil
+}
+
+func requireExecutorArtifactWrite(execCtx executorContext) error {
+	if execCtx.project == nil || execCtx.project.Data.Capabilities.ArtifactWrite {
+		return nil
+	}
+	return NewError(ErrorWorkspaceInvalid, "project capability artifact.write is disabled", 2, nil)
+}
+
+func executorArtifactWriteAllowed(execCtx executorContext) bool {
+	return execCtx.project == nil || execCtx.project.Data.Capabilities.ArtifactWrite
 }
 
 func postLocalAIJSON(ctx context.Context, workspace Workspace, profileID string, channelID string, client *http.Client, localPath string, payload any) ([]byte, error) {
@@ -843,6 +1250,54 @@ func dependencyPending(states map[string]Envelope[RunNodeStateData], edges []exe
 	return false
 }
 
+func conditionRouteSkipped(states map[string]Envelope[RunNodeStateData], edges []executorEdge, nodeID string) (bool, string) {
+	hasConditionalInput := false
+	hasMatchedConditionalInput := false
+	for _, edge := range edges {
+		if edge.To != nodeID {
+			continue
+		}
+		if !edgeHasRoutingCondition(edge) {
+			continue
+		}
+		hasConditionalInput = true
+		state := states[edge.From]
+		if state.Data.Status != RunStatusSuccess {
+			continue
+		}
+		if edgeRoutingConditionMatches(edge, state.Data.Output) {
+			hasMatchedConditionalInput = true
+		}
+	}
+	if hasConditionalInput && !hasMatchedConditionalInput {
+		return true, "condition_not_matched"
+	}
+	return false, ""
+}
+
+func edgeHasRoutingCondition(edge executorEdge) bool {
+	return strings.TrimSpace(edge.FromHandle) != "" || len(edge.Condition) > 0
+}
+
+func edgeRoutingConditionMatches(edge executorEdge, sourceOutput map[string]any) bool {
+	if len(edge.Condition) > 0 {
+		rule := executorConditionRule{
+			Path:     firstNonEmptyString(stringFromAny(edge.Condition["path"]), stringFromAny(edge.Condition["jsonPath"]), "decision"),
+			Operator: stringFromAny(edge.Condition["operator"]),
+			Value:    edge.Condition["value"],
+			Output:   strings.TrimSpace(edge.FromHandle),
+		}
+		if !conditionRuleMatches(sourceOutput, rule) {
+			return false
+		}
+	}
+	if strings.TrimSpace(edge.FromHandle) != "" {
+		value := firstNonNil(lookupExecutorPath(sourceOutput, "decision"), lookupExecutorPath(sourceOutput, "output"))
+		return executorValuesEqual(value, edge.FromHandle)
+	}
+	return true
+}
+
 func failNodeAndRun(workspace Workspace, run Envelope[RunData], node executorNode, cause error, existing Envelope[RunNodeStateData]) error {
 	message := safeExecutorError(cause)
 	data := RunNodeStateData{
@@ -1023,7 +1478,358 @@ func stringFromMap(values map[string]any, key string) string {
 	if !ok || value == nil {
 		return ""
 	}
-	return strings.TrimSpace(fmt.Sprint(value))
+	return strings.TrimSpace(stringFromAny(value))
+}
+
+func stringFromAny(value any) string {
+	if value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	default:
+		return fmt.Sprint(value)
+	}
+}
+
+func stringSliceFromMap(values map[string]any, key string) []string {
+	value, ok := values[key]
+	if !ok || value == nil {
+		return nil
+	}
+	switch typed := value.(type) {
+	case []string:
+		return append([]string{}, typed...)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, stringFromAny(item))
+		}
+		return out
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return nil
+		}
+		return []string{typed}
+	default:
+		return []string{fmt.Sprint(typed)}
+	}
+}
+
+func anySliceFromMap(values map[string]any, key string) []any {
+	value, ok := values[key]
+	if !ok || value == nil {
+		return nil
+	}
+	switch typed := value.(type) {
+	case []any:
+		return typed
+	case []map[string]any:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, item)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+type executorConditionRule struct {
+	Path     string
+	Operator string
+	Value    any
+	Output   string
+}
+
+func executorConditionContext(execCtx executorContext) map[string]any {
+	context := map[string]any{
+		"input": execCtx.input,
+		"node":  execCtx.nodeOut,
+	}
+	for key, value := range execCtx.input {
+		if _, exists := context[key]; !exists {
+			context[key] = value
+		}
+	}
+	for nodeID, output := range execCtx.nodeOut {
+		for key, value := range output {
+			if _, exists := context[key]; !exists {
+				context[key] = value
+			}
+		}
+		if _, exists := context[nodeID]; !exists {
+			context[nodeID] = output
+		}
+	}
+	return context
+}
+
+func executorConditionRules(value any) []executorConditionRule {
+	if value == nil {
+		return nil
+	}
+	var items []any
+	switch typed := value.(type) {
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return nil
+		}
+		if err := json.Unmarshal([]byte(typed), &items); err != nil {
+			return nil
+		}
+	case []any:
+		items = typed
+	case []map[string]any:
+		items = make([]any, 0, len(typed))
+		for _, item := range typed {
+			items = append(items, item)
+		}
+	default:
+		return nil
+	}
+	rules := make([]executorConditionRule, 0, len(items))
+	for _, item := range items {
+		m, ok := asStringAnyMap(item)
+		if !ok {
+			continue
+		}
+		pathValue := firstNonEmptyString(stringFromAny(m["path"]), stringFromAny(m["jsonPath"]))
+		if pathValue == "" {
+			pathValue = "decision"
+		}
+		rules = append(rules, executorConditionRule{
+			Path:     pathValue,
+			Operator: stringFromAny(m["operator"]),
+			Value:    m["value"],
+			Output:   stringFromAny(m["output"]),
+		})
+	}
+	return rules
+}
+
+func conditionRuleMatches(context any, rule executorConditionRule) bool {
+	operator := strings.ToLower(firstNonEmptyString(rule.Operator, "eq"))
+	value := lookupExecutorPath(context, firstNonEmptyString(rule.Path, "decision"))
+	switch operator {
+	case "exists":
+		return value != nil && strings.TrimSpace(stringFromAny(value)) != ""
+	case "truthy":
+		return executorTruthy(value)
+	case "neq", "ne", "not_eq":
+		return !executorValuesEqual(value, rule.Value)
+	case "contains":
+		return strings.Contains(stringFromAny(value), stringFromAny(rule.Value))
+	case "in":
+		return executorValueIn(value, rule.Value)
+	default:
+		return executorValuesEqual(value, rule.Value)
+	}
+}
+
+func lookupExecutorPath(value any, pathValue string) any {
+	pathValue = normalizeExecutorJSONPath(pathValue)
+	if pathValue == "" {
+		return value
+	}
+	if resolved := lookupPath(value, pathValue); resolved != nil {
+		return resolved
+	}
+	root, ok := asStringAnyMap(value)
+	if !ok {
+		return nil
+	}
+	if strings.HasPrefix(pathValue, "json.") {
+		if resolved := lookupPath(root["json"], strings.TrimPrefix(pathValue, "json.")); resolved != nil {
+			return resolved
+		}
+	}
+	if strings.HasPrefix(pathValue, "input.") {
+		if resolved := lookupPath(root["input"], strings.TrimPrefix(pathValue, "input.")); resolved != nil {
+			return resolved
+		}
+	}
+	if strings.HasPrefix(pathValue, "node.") {
+		if resolved := lookupPath(root["node"], strings.TrimPrefix(pathValue, "node.")); resolved != nil {
+			return resolved
+		}
+	}
+	for _, candidate := range root {
+		if resolved := lookupPath(candidate, pathValue); resolved != nil {
+			return resolved
+		}
+	}
+	return nil
+}
+
+func normalizeExecutorJSONPath(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "$")
+	value = strings.TrimPrefix(value, ".")
+	return strings.TrimSpace(value)
+}
+
+func executorTruthy(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return typed
+	case string:
+		v := strings.TrimSpace(strings.ToLower(typed))
+		return v != "" && v != "false" && v != "0" && v != "null"
+	case float64:
+		return typed != 0
+	case int:
+		return typed != 0
+	default:
+		return strings.TrimSpace(stringFromAny(typed)) != ""
+	}
+}
+
+func executorValuesEqual(left any, right any) bool {
+	leftString := strings.TrimSpace(stringFromAny(left))
+	rightString := strings.TrimSpace(stringFromAny(right))
+	if leftString == rightString {
+		return true
+	}
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
+}
+
+func executorValueIn(value any, set any) bool {
+	switch typed := set.(type) {
+	case []any:
+		for _, item := range typed {
+			if executorValuesEqual(value, item) {
+				return true
+			}
+		}
+		return false
+	case []string:
+		for _, item := range typed {
+			if executorValuesEqual(value, item) {
+				return true
+			}
+		}
+		return false
+	default:
+		parts := strings.Split(stringFromAny(set), ",")
+		for _, part := range parts {
+			if executorValuesEqual(value, strings.TrimSpace(part)) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func renderExecutorArgs(node executorNode, execCtx executorContext, args []string) []string {
+	rendered := make([]string, 0, len(args))
+	for _, arg := range args {
+		rendered = append(rendered, renderExecutorPrompt(arg, execCtx.input, execCtx.nodeOut))
+	}
+	return rendered
+}
+
+func executorProcessEnv(execCtx executorContext, node executorNode) []string {
+	env := []string{
+		"OPSC_RUN_ID=" + execCtx.run.ID,
+		"OPSC_NODE_ID=" + node.ID,
+		"OPSC_WORKFLOW_TEMPLATE_ID=" + execCtx.template.ID,
+	}
+	if pathValue := os.Getenv("PATH"); pathValue != "" {
+		env = append(env, "PATH="+pathValue)
+	}
+	if home := os.Getenv("HOME"); home != "" {
+		env = append(env, "HOME="+home)
+	}
+	if execCtx.project != nil {
+		env = append(env, "OPSC_PROJECT_ID="+execCtx.project.ID)
+		env = append(env, "OPSC_PROJECT_ROOT="+execCtx.project.Data.RootPath)
+	}
+	return env
+}
+
+func executorExitCode(err error) int {
+	var exitErr *osexec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return -1
+}
+
+func parseExecutorJSONObject(data []byte) (map[string]any, bool) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil, false
+	}
+	var out map[string]any
+	if err := json.Unmarshal(trimmed, &out); err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+func truncateExecutorText(value string) string {
+	const limit = 8192
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "...[truncated]"
+}
+
+func redactExecutorError(execCtx executorContext, err error) string {
+	return redactExecutorText(execCtx, safeExecutorError(err))
+}
+
+func redactExecutorText(execCtx executorContext, value string) string {
+	type replacement struct {
+		value string
+		label string
+	}
+	replacements := []replacement{{value: execCtx.workspace.Root, label: "<workspace>"}}
+	if execCtx.project != nil {
+		replacements = append(replacements, replacement{value: execCtx.project.Data.RootPath, label: "<project-root>"})
+		if resolved, err := filepath.EvalSymlinks(execCtx.project.Data.RootPath); err == nil {
+			replacements = append(replacements, replacement{value: resolved, label: "<project-root>"})
+		}
+	}
+	sort.SliceStable(replacements, func(i int, j int) bool { return len(replacements[i].value) > len(replacements[j].value) })
+	out := value
+	for _, item := range replacements {
+		value := strings.TrimSpace(item.value)
+		if value == "" {
+			continue
+		}
+		out = strings.ReplaceAll(out, value, item.label)
+	}
+	return strings.TrimSpace(out)
+}
+
+func redactExecutorProjectError(project Envelope[ProjectData], err error) error {
+	if err == nil {
+		return nil
+	}
+	message := strings.ReplaceAll(err.Error(), strings.TrimSpace(project.Data.RootPath), "<project-root>")
+	var workspaceErr *Error
+	if asLocalWorkspaceError(err, &workspaceErr) {
+		return NewError(workspaceErr.Code, message, workspaceErr.ExitCode, workspaceErr.Details)
+	}
+	return errors.New(message)
 }
 
 func localAIErrorMessage(body []byte) string {

@@ -1,5 +1,15 @@
 # AI 项目记忆变更记录
 
+## 2026-05-30 | Local Workflow Executor Phase 10 project-aware 收口 | commit: pending
+
+- 目标：在不扩大 MCP 写面、不迁移 PDD/VPS run 的前提下，把 Phase 9 executor MVP 接到本地项目 capability/path guard，并补齐最小 `condition`/`script` 执行链路。
+- 变更：`internal/localworkspace` executor 读取 run `projectId`，校验 project adapter、root fingerprint、capability、path safety 和 `artifact.write`；新增 `condition` 节点、project/local `script` 节点、`source/target` edge fallback、`fromHandle`/condition 路由跳过、节点级 retry、project output mapping、脚本最小环境变量和 root/secret 脱敏。Web 本地模板启动参数允许透传 `profileId/projectId` 到 local run；新增 `tools/local_workspace_browser_smoke.py` 作为真实浏览器 local workspace smoke 脚本。
+- 原因：用户后续要把本系统作为自用本地项目管理和多 agent 接入底座；executor 需要先复用已有 workspace project capability model，而不是另起第二套本地脚本执行事实源。
+- 验证：已用 Docker `golang:1.25-alpine` 执行 `gofmt`；已运行 `go test ./internal/localworkspace ./cmd/opsc`，覆盖 project script retry/output mapping、condition edge skip、capability deny、path escape、secret/root redaction、index rebuild/status/events 和既有 Phase 8/9 回归。已新增 browser smoke 脚本并通过 Python 语法检查；真实浏览器端到端仍列入 `docs/pending-test.md`。
+- 影响：新增本地 executor project-aware 能力和轻量浏览器 smoke 工具；不改旧 Go main/router/service/repository/DB，不改 PDD/VPS run 事实源，不扩大 MCP mutation surface，不新增 canonical object 类型。
+- 风险：仍未实现 `image_edit`、`video_generation`、复杂 loop/guardrail、完整模板级重试、自动素材匹配、专用文章/视频/电商 adapter、安装打包和 CI 浏览器回归；真实模型账号和真实浏览器 session 仍需人工回归。
+- 后续：Phase 11 优先做专用 project adapter 真接入、浏览器自动化回归落地和安装/打包文档，不优先迁移旧 PDD/VPS run 或扩大 MCP 写面。
+
 ## 2026-05-30 | Local Workflow Executor MVP | commit: pending
 
 - 目标：把 local workspace 的 pending run 草稿接入一个明确、唯一的本地执行入口，并验证 canonical node state、events、artifact/ref 写回链路。

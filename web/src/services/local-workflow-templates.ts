@@ -48,9 +48,12 @@ export async function deleteLocalPDDWorkflowTemplate(baseUrl: string, id: string
 
 export async function startLocalPDDWorkflowTemplateRun(baseUrl: string, templateId: string, payload: StartWorkflowTemplateRunRequest): Promise<StartWorkflowTemplateRunResult> {
     const template = await fetchLocalPDDWorkflowTemplate(baseUrl, templateId);
+    const settings = template.spec.settings as WorkflowTemplateSpec["settings"] & { defaultProfileId?: string; defaultProjectId?: string; profileId?: string; projectId?: string };
     const run = await createLocalRun(baseUrl, {
         templateId,
         status: "pending",
+        profileId: payload.profileId || settings.defaultProfileId || settings.profileId,
+        projectId: payload.projectId || settings.defaultProjectId || settings.projectId,
         input: {
             inputs: payload.inputs || [],
             productConcurrency: payload.productConcurrency ?? template.spec.settings.productConcurrency,
@@ -85,7 +88,7 @@ export async function startLocalPDDWorkflowTemplateRun(baseUrl: string, template
         type: "run.waiting_for_executor",
         level: "info",
         actor: { type: "web", id: "ops-canvas-web" },
-        message: "本地 run 已创建，执行器尚未接入。",
+        message: "本地 run 已创建，等待本地执行器领取。",
         data: {
             templateId,
             workflowType: template.workflowType || "pdd",

@@ -201,7 +201,7 @@ Local Workspace v1 面向个人/本机自用场景，是私有数据的本地事
 
 - local workspace 当前仍是本机自用能力，不提供云同步；“素材库”、公共提示词和管理员配置仍保存在服务器/DB。
 - 浏览器旧 localforage/IndexedDB 测试数据不迁移；连接 local workspace 后浏览器只保留 cache、temporary state 和展示层补水。
-- local run 已接入 `opsc executor` MVP，可执行固定本地素材、`text_generation` 和 `image_generation` 最小节点集；其它节点类型、本地项目 adapter、完整失败策略和真实 PDD/VPS executor 迁移仍未完成。
+- local run 已接入 `opsc executor` MVP，可执行固定本地素材、`text_generation`、`image_generation`、`condition` 和受 project capability/path guard 约束的本地 `script` 最小节点集；`image_edit`、`video_generation`、专用文章/视频/电商 project adapter、完整失败策略和真实 PDD/VPS executor 迁移仍未完成。
 - 现有 PDD/VPS run 不迁移，VPS run 查看和本地 workspace run 是两条边界清晰的路径。
 - MCP 当前是薄封装，主要暴露只读/诊断/dry-run 和通过 active `opsc serve` 重建索引；不暴露批量对象写入和执行器能力。
 - 服务器素材库目前主要保存 URL 或文本，暂未提供文件上传接口。

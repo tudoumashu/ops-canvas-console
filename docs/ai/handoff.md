@@ -2,7 +2,7 @@
 
 ## Current Objective
 
-Phase 9 Local Workflow Executor MVP 已完成：本轮新增唯一正式入口 `opsc executor --workspace <path>`，把 local workspace 的 `run.waiting_for_executor` 接到本地 run-once 执行链路。executor 可领取 pending run 或恢复已接管的 running run，执行 `input`、`text_static`、固定本地素材 `material_lookup`、`text_generation`、`image_generation`，复用 workspace profile `secretRef` 调 OpenAI-compatible provider，并写回 canonical node state、append-only events、global artifact 与 run artifact ref。仍不迁移现有 PDD/VPS run，不扩大 MCP 写面，不做 Full GC、分布式调度、完整 project adapter 或其它节点类型。
+Phase 10 Local Workflow Executor 收口已完成：唯一正式入口仍是 `opsc executor --workspace <path>`，在 Phase 9 固定素材/text/image MVP 上新增 project-aware `condition`、本地项目 `script`、节点级 retry、conditional edge skip、project output mapping、project capability/path guard 和 artifact.write 校验。executor 仍只读写 canonical local workspace objects，不迁移现有 PDD/VPS run，不扩大 MCP 写面，不做 Full GC、分布式调度、`image_edit`/`video_generation`、复杂 loop/guardrail 或专用文章/视频/电商 adapter。
 
 ## Completed Work
 
@@ -10,6 +10,8 @@ Phase 9 Local Workflow Executor MVP 已完成：本轮新增唯一正式入口 `
 - Phase 9 新增 `internal/localworkspace` executor：run 领取与恢复、拓扑执行、固定本地素材复制为 canonical artifact、text/image generation provider 调用、node/run 状态更新、事件写入、artifact/ref 写入和已成功节点跳过。
 - Phase 9 新增 `cmd/opsc` 的 `executor` 命令，支持 `--workspace` 和 `--run`，JSON 输出沿用 `{ ok, data, warnings }`，workflow 失败写入 run error，基础设施错误才作为 CLI 非 0。
 - Phase 9 收口继续补充 executor 写入后的 index rebuild 回归，并用 `/tmp/opsc-phase9-manual` fake provider 手工 smoke 验证 `opsc executor` 可把固定本地素材、文本生成和图片生成 run 执行到 success；真实浏览器 Web UI 端到端仍保留在 `docs/pending-test.md`。
+- Phase 10 继续扩展 `internal/localworkspace` executor：run `projectId` 会读取 `projects/<proj_id>/project.json` 并校验 adapter、root fingerprint、capability、path safety 和 `artifact.write`；新增 `condition` 节点、project/local `script` 节点、`source/target` edge fallback、`fromHandle`/condition 路由跳过、节点级 retry 和相对路径 project output mapping。
+- Phase 10 Web UI 本地模板启动参数允许透传 `profileId/projectId` 到 local run；新增 `tools/local_workspace_browser_smoke.py`，用于已有 `opsc serve` 和 Next dev server 下复测 browser bootstrap session、本地模板/run 状态页和 artifact 预览。
 - Phase 8 新增稳定化验证：`opsc serve` state/session/auth/redaction、CLI `serve` 输出脱敏、AI proxy `secretRef` 与浏览器 header 隔离、MCP stdio 工具面冻结和诊断/plan/index rebuild smoke、本地模板草稿 run -> canonical artifact -> run artifact ref happy path；同步 README、features、contract、pending-test、todo、CHANGELOG、项目记忆和中央 Wiki。
 - 已和用户拍板 local-first 数据分离基线：私有模板、run、artifact、个人素材、个人 prompt、本地项目路径和本地日志默认本地；云端只保留账号/授权/计费、公共模板、公共素材和商用 profile 能力。
 - 已确认默认 workspace 为 `~/OpsCanvas`，支持多 workspace；项目文件只保存外部路径引用，不复制进 workspace；生成 artifact 复制进 workspace；secrets 不写普通 JSON；`opsc serve` 使用本地随机 bearer token 或 browser session。
@@ -86,7 +88,7 @@ Phase 9 Local Workflow Executor MVP 已完成：本轮新增唯一正式入口 `
 
 ## In Progress
 
-- Phase 9 executor 仍是 MVP：只覆盖固定本地素材、文本生成、图片生成和最小辅助节点；`image_edit`、`video_generation`、条件、脚本、完整模板重试策略、project adapter、自动素材匹配和真实 PDD/VPS run 迁移仍待后续阶段。
+- executor 仍是 MVP：只覆盖固定本地素材、文本生成、图片生成、条件分支和受 project guard 约束的脚本节点；`image_edit`、`video_generation`、复杂 loop/guardrail、完整模板重试策略、自动素材匹配、专用文章/视频/电商 project adapter 和真实 PDD/VPS run 迁移仍待后续阶段。
 
 ## Blockers
 
@@ -107,11 +109,11 @@ Phase 9 Local Workflow Executor MVP 已完成：本轮新增唯一正式入口 `
 
 ## Next Recommended Steps
 
-- 下一阶段：Phase 10 优先做本地项目 adapter MVP，让 `projects/<proj_id>/project.json` 的 capability guard、path safety 和 adapter metadata 真正参与文章/视频/电商等本地项目工作流；不要先扩大 MCP 写面或迁移旧 VPS run。
-- executor 后续要补 `image_edit`、`video_generation`、条件、脚本、模板级失败重试语义和更完整的失败恢复策略；继续复用 workspace core、profile `secretRef` 和 canonical artifact/ref 写回路径。
+- 下一阶段：Phase 11 优先做专用 project adapter 真接入和浏览器自动化回归落地，让文章/视频/电商项目有明确脚本模板、输入输出约定和安装/打包文档；不要先扩大 MCP 写面或迁移旧 VPS run。
+- executor 后续要补 `image_edit`、`video_generation`、复杂 loop/guardrail、模板级失败重试语义和更完整的失败恢复策略；继续复用 workspace core、profile `secretRef` 和 canonical artifact/ref 写回路径。
 - `workspace doctor` 下一阶段可增加 index 新鲜度/重建建议；当前只做结构、引用和占位符级检查，不解析真实 secrets 或模型供应商凭据。
-- project path guard 当前还只是 foundation API，下一阶段需要由 project adapter 或写入型业务 API 实际调用，才能形成端到端执行边界。
-- 本地项目引用现在已有 Web UI 入口，但仍只是 workspace 引用管理；下一阶段需要让 `opsc executor` 的 project adapter 使用 `proj_<id>`、capability guard 和 adapter metadata 执行业务。
+- project path guard 已进入 executor `condition`/`script`/output mapping 最小链路；下一阶段需要专用 adapter 把文章/视频/电商的真实业务目录和脚本约定固化下来。
+- 本地项目引用现在已有 Web UI 入口，executor 已能使用 `proj_<id>`；下一阶段需要在 Web 模板/工作流中补真实项目选择和业务 adapter 配置，而不是让用户手写底层脚本节点。
 - 对真实产物写入类动作继续人工回归：替换图片旧内容不残留、自由比例/锁比例、裁剪确认、多角度生成节点保留、artifact 预览、应用副本后下游重跑。
 - 如后续要求公网 Web 直接通过 `https://96.9.225.98` 访问，需要先单独确认反向代理/域名/端口方案；本轮未修改部署配置或 `.env`。
 
@@ -128,6 +130,10 @@ Phase 9 Local Workflow Executor MVP 已完成：本轮新增唯一正式入口 `
 - passed：Phase 9 已运行 `GOPROXY=https://goproxy.cn,direct go test ./internal/localworkspace ./cmd/opsc`，覆盖 executor 固定素材/text/image happy path、secretRef provider 调用、running run 恢复跳过已成功节点、CLI `opsc executor --json` 最小执行和既有 serve/MCP 回归。
 - passed：Phase 9 收口已补充 executor 写入后删除并重建 `index.sqlite` 的回归，确认重建后 `GetRunStatus`、node states、event sequence 和 `ListRunArtifactSummaries` 仍正确；已再次运行 Docker `gofmt` 和 `GOPROXY=https://goproxy.cn,direct go test ./internal/localworkspace ./cmd/opsc`。
 - passed manual：Phase 9 fake provider CLI smoke 已通过，证据位于 `/tmp/opsc-phase9-manual/evidence-summary.json` 和 `docs/manual-test-report-phase9.md`；结果为 `executorProcessed=1`、run `success`、4 个 node state `success`、3 个 artifact/ref、fake provider 路径为 `/v1/chat/completions` 与 `/v1/images/generations`，未收到 browser cookie。
+- passed：Phase 10 已用 Docker `golang:1.25-alpine` 执行 `gofmt -w internal/localworkspace/executor.go internal/localworkspace/executor_test.go`。
+- passed：Phase 10 已运行 Docker `go test ./internal/localworkspace ./cmd/opsc`，覆盖 project-aware executor 的 condition/script/retry/output mapping、capability/path guard、root/secret 脱敏和既有 serve/MCP/executor 回归。
+- passed：Phase 10 已运行 `python -m py_compile tools/local_workspace_browser_smoke.py`、`cd web && npx tsc --noEmit` 和 `git diff --check`。
+- not run：Phase 10 未启动真实浏览器 smoke；脚本和剩余手工项已记录到 `docs/manual-test-report-phase10.md` 与 `docs/pending-test.md`。
 - passed：Phase 0 文档变更已运行 `git diff --check`，diff 范围只包含 Markdown/Mermaid 文档。
 - passed：中央 Wiki 已运行 `lint_wiki.sh`、`reindex_qmd.sh llm-wiki` 和 `qmd embed`。
 - passed：Phase 1 已用 Docker `golang:1.25-alpine` 执行 `gofmt -w internal/localworkspace cmd/opsc`。

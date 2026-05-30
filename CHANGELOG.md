@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [新增] Local Workflow Executor Phase 10：接入 run `projectId`、project capability/path guard、`condition`/`script`、节点级 retry、项目输出映射和 project-aware artifact 写入校验，并补充 Web UI local workspace browser smoke 脚本。
 + [新增] Local Workflow Executor MVP：新增 `opsc executor`，可领取 local workspace 中 `waiting_for_executor` run，执行固定本地素材、文本生成和图片生成节点，并写回 canonical node state、events、artifact 与 run artifact ref。
 + [修复] MCP `opsc_workspace_info` 默认输出不再暴露本地 `opsc serve` URL、host 或 port，Phase 8 手工验收已收口为可关闭状态。
 + [优化] Local Workspace v1 Phase 8 稳定化：补充 `opsc serve` 鉴权/redaction、CLI 输出脱敏、AI `secretRef` proxy、MCP stdio wrapper 工具面冻结和本地模板草稿 run/artifact ref 的回归验证。
