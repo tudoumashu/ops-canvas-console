@@ -363,6 +363,52 @@ func TestServeCommandJSONOutputsRuntimeWithoutToken(t *testing.T) {
 	if strings.Contains(stdout, root) {
 		t.Fatalf("serve stdout leaked workspace path: %s", stdout)
 	}
+	token := readMCPServeTokenForTest(t, root)
+	if token != "" && strings.Contains(stdout, token) {
+		t.Fatalf("serve stdout leaked bearer token: %s", stdout)
+	}
+}
+
+func TestServeCommandHumanOutputRedactsRuntimeSecrets(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
+	root := filepath.Join(t.TempDir(), "workspace")
+	seedQueryWorkspace(t, root)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdout bytes.Buffer
+	stderr := &cancelOnSubstringWriter{cancel: cancel, needle: "launch secret file:"}
+	code := runWithContext(ctx, []string{"serve", "--workspace", root, "--port", "0", "--origin", "http://127.0.0.1:3000"}, &stdout, stderr)
+	if code != 0 {
+		t.Fatalf("serve exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %s, want empty", stdout.String())
+	}
+	output := stderr.String()
+	for _, want := range []string{"opsc serve listening on http://127.0.0.1:", "token file: bearer.token", "launch secret file: launch.secret"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("serve stderr missing %q:\n%s", want, output)
+		}
+	}
+	workspace, err := localworkspace.Open(root)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	stateDir, err := workspace.StateDir()
+	if err != nil {
+		t.Fatalf("StateDir() error = %v", err)
+	}
+	token := readMCPServeTokenForTest(t, root)
+	tokenFile, err := workspace.StatePath("bearer.token")
+	if err != nil {
+		t.Fatalf("StatePath() error = %v", err)
+	}
+	for _, secret := range []string{root, stateDir, tokenFile, token} {
+		if strings.TrimSpace(secret) != "" && strings.Contains(output, secret) {
+			t.Fatalf("serve stderr leaked %q:\n%s", secret, output)
+		}
+	}
 }
 
 type querySeed struct {

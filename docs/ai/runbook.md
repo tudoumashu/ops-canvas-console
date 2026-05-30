@@ -158,7 +158,7 @@ Phase 8 local workspace 稳定化目标验证：
 docker run --rm -e GOPROXY=https://goproxy.cn,direct -v "$PWD":/src -w /src golang:1.25-alpine /usr/local/go/bin/go test ./internal/localworkspace ./cmd/opsc
 ```
 
-该目标测试覆盖 `opsc serve` 鉴权/redaction/session、AI proxy `secretRef` 与浏览器 header 隔离、本地模板草稿 run 到 canonical artifact ref happy path，以及 `cmd/opsc` MCP stdio wrapper smoke。Go 文件改动后可用 Docker 执行 `gofmt`，避免本机未安装 Go：
+该目标测试覆盖 `opsc serve` 鉴权/redaction/session、CLI `serve` 输出脱敏、AI proxy `secretRef` 与浏览器 header 隔离、本地模板草稿 run 到 canonical artifact ref happy path，以及 `cmd/opsc` MCP stdio wrapper smoke、工具面冻结、doctor/export plan/GC dry-run/run events/index rebuild。Go 文件改动后可用 Docker 执行 `gofmt`，避免本机未安装 Go：
 
 ```bash
 docker run --rm -v "$PWD":/src -w /src golang:1.25-alpine /usr/local/go/bin/gofmt -w internal/localworkspace cmd/opsc

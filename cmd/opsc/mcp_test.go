@@ -48,16 +48,41 @@ func TestMCPInitializeAndToolsList(t *testing.T) {
 	for _, forbidden := range []string{
 		"opsc_template_create",
 		"opsc_template_update",
+		"opsc_template_delete",
+		"opsc_run_create",
 		"opsc_run_update",
+		"opsc_run_delete",
 		"opsc_artifact_create",
+		"opsc_artifact_update",
+		"opsc_artifact_delete",
+		"opsc_profile_create",
 		"opsc_profile_update",
+		"opsc_profile_delete",
+		"opsc_project_create",
 		"opsc_project_update",
+		"opsc_project_delete",
+		"opsc_asset_create",
 		"opsc_asset_update",
+		"opsc_asset_delete",
+		"opsc_prompt_create",
 		"opsc_prompt_update",
+		"opsc_prompt_delete",
 	} {
 		if mcpToolListContains(tools, forbidden) {
 			t.Fatalf("tools/list exposes forbidden object mutation tool %q", forbidden)
 		}
+	}
+	for _, item := range tools {
+		tool := item.(map[string]any)
+		name := tool["name"].(string)
+		for _, forbiddenWord := range []string{"_create", "_update", "_delete", "_write", "_import", "_attach", "_append"} {
+			if strings.Contains(name, forbiddenWord) {
+				t.Fatalf("tools/list exposes write-like object tool %q", name)
+			}
+		}
+	}
+	if !mcpToolListContains(tools, "opsc_workspace_index_rebuild") {
+		t.Fatalf("tools/list missing maintenance index rebuild tool: %#v", tools)
 	}
 }
 
@@ -81,6 +106,74 @@ func TestMCPWorkspaceInfoToolWrapsCLIWithoutPathLeak(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Query Workspace") {
 		t.Fatalf("MCP workspace info missing workspace name:\n%s", stdout.String())
+	}
+}
+
+func TestMCPDoctorExportAndGCPlanTools(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspace")
+	seed := seedQueryWorkspace(t, root)
+	input := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":"doctor","method":"tools/call","params":{"name":"opsc_workspace_doctor","arguments":{"workspace":` + jsonString(root) + `}}}`,
+		`{"jsonrpc":"2.0","id":"export","method":"tools/call","params":{"name":"opsc_workspace_export_plan","arguments":{"workspace":` + jsonString(root) + `}}}`,
+		`{"jsonrpc":"2.0","id":"gc","method":"tools/call","params":{"name":"opsc_workspace_gc_plan","arguments":{"workspace":` + jsonString(root) + `}}}`,
+		"",
+	}, "\n")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runMCPServer(context.Background(), cliOptions{}, strings.NewReader(input), &stdout, &stderr); code != 0 {
+		t.Fatalf("runMCPServer exit = %d stderr=%s", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %s, want empty", stderr.String())
+	}
+	output := stdout.String()
+	if strings.Contains(output, root) || strings.Contains(output, seed.ProjectRoot) {
+		t.Fatalf("MCP diagnostic plan output leaked sensitive path:\n%s", output)
+	}
+	for _, want := range []string{`"includePaths"`, `"excludePaths"`, `"candidates"`, "Workspace OK"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("MCP diagnostic plan output missing %q:\n%s", want, output)
+		}
+	}
+	responses := decodeMCPResponses(t, output)
+	if len(responses) != 3 {
+		t.Fatalf("responses = %d, want 3\n%s", len(responses), output)
+	}
+	for _, response := range responses {
+		result := response["result"].(map[string]any)
+		if result["isError"] != false {
+			t.Fatalf("result.isError = %#v, want false\n%s", result["isError"], output)
+		}
+	}
+}
+
+func TestMCPDoctorUnhealthyIsToolError(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspace")
+	if _, err := localworkspace.Init(localworkspace.InitOptions{Path: root, Name: "Unhealthy Workspace"}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(root, "runs")); err != nil {
+		t.Fatalf("remove runs dir: %v", err)
+	}
+	input := `{"jsonrpc":"2.0","id":"doctor","method":"tools/call","params":{"name":"opsc_workspace_doctor","arguments":{"workspace":` + jsonString(root) + `}}}` + "\n"
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runMCPServer(context.Background(), cliOptions{}, strings.NewReader(input), &stdout, &stderr); code != 0 {
+		t.Fatalf("runMCPServer exit = %d stderr=%s", code, stderr.String())
+	}
+	output := stdout.String()
+	if strings.Contains(output, root) {
+		t.Fatalf("MCP unhealthy doctor leaked workspace path:\n%s", output)
+	}
+	if !strings.Contains(output, "dir:runs") || !strings.Contains(output, "Workspace has problems") {
+		t.Fatalf("MCP unhealthy doctor missing diagnostic text:\n%s", output)
+	}
+	responses := decodeMCPResponses(t, output)
+	result := responses[0]["result"].(map[string]any)
+	if result["isError"] != true {
+		t.Fatalf("result.isError = %#v, want true\n%s", result["isError"], output)
 	}
 }
 

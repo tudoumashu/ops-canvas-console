@@ -24,7 +24,7 @@ AI local profile 是 workspace-scoped 会话视图，不是全局浏览器配置
 
 ## `opsc serve` Token 不是 `LOCAL_AGENT_TOKEN`
 
-当前 `cmd/local-agent` 使用 `LOCAL_AGENT_TOKEN` 连接 VPS 控制台领取脚本任务。`opsc serve` 的 `bearer.token` 存在 workspace 外 XDG state 目录，只用于显式 HTTP client 访问 local workspace；browser 只能用一次性 `launch.secret` 换 HttpOnly session，带 `Origin` 的请求不接受 bearer。`opsc mcp` 的查询/诊断/dry-run 工具仍包装同进程 CLI JSON 命令；唯一例外是 `opsc_workspace_index_rebuild`，它只在 active loopback `opsc serve` 存在时读取 runtime state 中的相对 `bearer.token` 并调用 `/api/local/workspace/index/rebuild`，不把 token、token 文件路径或 serve URL 输出给 MCP client。两者不能混用，也不要把任一 token、launch secret 或 session id 写进 exports、日志、普通 JSON 或默认 CLI 输出。`GET /health` / `GET /api/health` 是唯一免鉴权健康检查端点，只能返回 `ok`。
+当前 `cmd/local-agent` 使用 `LOCAL_AGENT_TOKEN` 连接 VPS 控制台领取脚本任务。`opsc serve` 的 `bearer.token` 存在 workspace 外 XDG state 目录，只用于显式 HTTP client 访问 local workspace；browser 只能用一次性 `launch.secret` 换 HttpOnly session，带 `Origin` 的请求不接受 bearer。`opsc serve` 普通启动日志最多打印 `bearer.token` / `launch.secret` 文件名，不应打印 workspace 绝对路径、state dir、token 文件真实路径或 token 内容。`opsc mcp` 的查询/诊断/dry-run 工具仍包装同进程 CLI JSON 命令；唯一例外是 `opsc_workspace_index_rebuild`，它只在 active loopback `opsc serve` 存在时读取 runtime state 中的相对 `bearer.token` 并调用 `/api/local/workspace/index/rebuild`，不把 token、token 文件路径或 serve URL 输出给 MCP client。两者不能混用，也不要把任一 token、launch secret 或 session id 写进 exports、日志、普通 JSON 或默认 CLI 输出。`GET /health` / `GET /api/health` 是唯一免鉴权健康检查端点，只能返回 `ok`。
 
 浏览器 session cookie 是 `SameSite=Lax`，开发时不要混用 `localhost` 和 `127.0.0.1`。如果 Web UI 是 `http://localhost:3000`，本地工作区服务地址也优先填 `http://localhost:17680`；如果 Web UI 是 `http://127.0.0.1:3000`，再使用 `http://127.0.0.1:17680`。否则 session bootstrap 可能成功但后续 fetch 不带 cookie。
 
