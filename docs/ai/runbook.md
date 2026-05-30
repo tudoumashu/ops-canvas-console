@@ -154,6 +154,21 @@ tools/hybrid_ecommerce_vps_smoke.py \
 
 该 helper 只编排 `opsc ecommerce import-template`、`opsc ecommerce create-run`、`opsc executor --run`、`opsc run status` 和 `opsc artifact list --run`，不直接读写 workspace 文件，不直接调用 VPS API，不打印 secret。也可以用 `--remote-url`、`--remote-template`、`--secret-env` 显式覆盖默认 env。
 
+如果使用已写入 workspace 的 profile/channel，可改用：
+
+```bash
+tools/hybrid_ecommerce_vps_smoke.py \
+  --workspace ~/OpsCanvas \
+  --remote-url http://92.9.225.98:18080 \
+  --remote-template <confirmed_template_id> \
+  --profile <profile_id> \
+  --channel <channel_id> \
+  --input-file /path/to/hybrid-input.json \
+  --evidence /tmp/opsc-phase11-vps-smoke.json
+```
+
+helper 不再默认传 `default/vps` profile/channel；没有显式 profile/channel 时，凭据来自 `--secret-env` 或 `OPSC_HYBRID_SECRET_ENV` 指向的 env var。
+
 Web UI 本地工作区连接：
 
 1. 启动 `go run ./cmd/opsc serve --workspace ~/OpsCanvas --port 17680 --origin <当前 Web origin>`。

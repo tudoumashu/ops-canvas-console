@@ -27,9 +27,9 @@ def main() -> int:
         "--remote-template",
         default=os.environ.get("OPSC_HYBRID_REMOTE_TEMPLATE_ID") or os.environ.get("OPSC_VPS_REMOTE_TEMPLATE_ID"),
     )
-    parser.add_argument("--profile", default=os.environ.get("OPSC_HYBRID_PROFILE_ID", "default"))
-    parser.add_argument("--channel", default=os.environ.get("OPSC_HYBRID_CHANNEL_ID", "vps"))
-    parser.add_argument("--secret-env", default=os.environ.get("OPSC_HYBRID_SECRET_ENV", "OPSC_HYBRID_VPS_TOKEN"))
+    parser.add_argument("--profile", default=os.environ.get("OPSC_HYBRID_PROFILE_ID", ""))
+    parser.add_argument("--channel", default=os.environ.get("OPSC_HYBRID_CHANNEL_ID", ""))
+    parser.add_argument("--secret-env", default=default_secret_env())
     parser.add_argument("--input-file", required=True, help="JSON object or bare inputs array for the local run.")
     parser.add_argument("--opsc", default=os.environ.get("OPSC_BIN", "go run ./cmd/opsc"))
     parser.add_argument("--timeout", type=int, default=1800)
@@ -43,6 +43,7 @@ def main() -> int:
         "profile": args.profile,
         "channel": args.channel,
         "secretEnv": args.secret_env,
+        "credentialSource": credential_source(args),
         "steps": [],
     }
 
@@ -56,6 +57,8 @@ def main() -> int:
             missing.append(name)
     if args.secret_env and not os.environ.get(args.secret_env):
         missing.append(f"env {args.secret_env}")
+    if not args.secret_env and not args.profile and not args.channel:
+        missing.append("--secret-env/OPSC_HYBRID_SECRET_ENV or OPSC_HYBRID_PROFILE_ID/OPSC_HYBRID_CHANNEL_ID")
     if args.input_file and not Path(args.input_file).is_file():
         missing.append(f"input file {args.input_file}")
     if missing:
@@ -69,49 +72,47 @@ def main() -> int:
     try:
         import_result = run_json(
             args.opsc,
-            [
-                "ecommerce",
-                "import-template",
-                "--workspace",
-                args.workspace,
-                "--remote-url",
-                args.remote_url,
-                "--remote-template",
-                args.remote_template,
-                "--profile",
-                args.profile,
-                "--channel",
-                args.channel,
-                "--secret-env",
-                args.secret_env,
-                "--json",
-            ],
+            with_optional_pairs(
+                [
+                    "ecommerce",
+                    "import-template",
+                    "--workspace",
+                    args.workspace,
+                    "--remote-url",
+                    args.remote_url,
+                    "--remote-template",
+                    args.remote_template,
+                    "--json",
+                ],
+                {"--profile": args.profile, "--channel": args.channel, "--secret-env": args.secret_env},
+            ),
             args.timeout,
             "import-template",
             evidence,
+            args.secret_env,
         )
         template = import_result["data"]["template"]
         template_id = template["id"]
 
         run_result = run_json(
             args.opsc,
-            [
-                "ecommerce",
-                "create-run",
-                template_id,
-                "--workspace",
-                args.workspace,
-                "--input-file",
-                args.input_file,
-                "--profile",
-                args.profile,
-                "--channel",
-                args.channel,
-                "--json",
-            ],
+            with_optional_pairs(
+                [
+                    "ecommerce",
+                    "create-run",
+                    template_id,
+                    "--workspace",
+                    args.workspace,
+                    "--input-file",
+                    args.input_file,
+                    "--json",
+                ],
+                {"--profile": args.profile, "--channel": args.channel},
+            ),
             args.timeout,
             "create-run",
             evidence,
+            args.secret_env,
         )
         run_id = run_result["data"]["run"]["id"]
 
@@ -121,6 +122,7 @@ def main() -> int:
             args.timeout,
             "executor",
             evidence,
+            args.secret_env,
         )
         status_result = run_json(
             args.opsc,
@@ -128,6 +130,7 @@ def main() -> int:
             args.timeout,
             "run-status",
             evidence,
+            args.secret_env,
         )
         artifacts_result = run_json(
             args.opsc,
@@ -135,6 +138,7 @@ def main() -> int:
             args.timeout,
             "artifact-list",
             evidence,
+            args.secret_env,
         )
     except SmokeError as exc:
         evidence["ok"] = False
@@ -144,7 +148,7 @@ def main() -> int:
         return exc.exit_code
 
     run_status = status_result["data"]["run"]["status"]
-    artifact_count = len(artifacts_result["data"])
+    artifact_count = len(artifacts_result["data"].get("artifacts", []))
     evidence["ok"] = run_status == "success"
     evidence["templateId"] = template_id
     evidence["runId"] = run_id
@@ -164,15 +168,58 @@ class SmokeError(Exception):
         self.exit_code = exit_code
 
 
-def run_json(opsc: str, args: list[str], timeout: int, step: str, evidence: dict[str, Any]) -> dict[str, Any]:
+def default_secret_env() -> str:
+    configured = os.environ.get("OPSC_HYBRID_SECRET_ENV", "").strip()
+    if configured:
+        return configured
+    if os.environ.get("OPSC_HYBRID_VPS_TOKEN"):
+        return "OPSC_HYBRID_VPS_TOKEN"
+    return ""
+
+
+def credential_source(args: argparse.Namespace) -> str:
+    if args.profile or args.channel:
+        return "profileChannel"
+    if args.secret_env:
+        return "envSecretRef"
+    return "missing"
+
+
+def with_optional_pairs(args: list[str], pairs: dict[str, str | None]) -> list[str]:
+    result = list(args)
+    for key, value in pairs.items():
+        value = str(value or "").strip()
+        if value:
+            result.extend([key, value])
+    return result
+
+
+def run_json(
+    opsc: str,
+    args: list[str],
+    timeout: int,
+    step: str,
+    evidence: dict[str, Any],
+    secret_env: str | None,
+) -> dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[1]
     command = [*shlex.split(opsc), *args]
-    completed = subprocess.run(command, cwd=repo_root, text=True, capture_output=True, timeout=timeout, check=False)
+    try:
+        completed = subprocess.run(command, cwd=repo_root, text=True, capture_output=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as exc:
+        evidence["steps"].append(
+            {
+                "name": step,
+                "exitCode": "timeout",
+                "stderr": redact_text(exc.stderr or "", secret_env),
+            }
+        )
+        raise SmokeError(f"{step} timed out after {timeout}s") from exc
     evidence["steps"].append(
         {
             "name": step,
             "exitCode": completed.returncode,
-            "stderr": redact_text(completed.stderr),
+            "stderr": redact_text(completed.stderr, secret_env),
         }
     )
     if completed.returncode != 0:
@@ -186,11 +233,14 @@ def run_json(opsc: str, args: list[str], timeout: int, step: str, evidence: dict
     return payload
 
 
-def redact_text(value: str) -> str:
+def redact_text(value: str, secret_env: str | None) -> str:
     if not value:
         return ""
     redacted = value
-    for key in ("OPSC_HYBRID_VPS_TOKEN", "OPSC_VPS_ADMIN_TOKEN", "PDD_ADMIN_TOKEN"):
+    secret_keys = {"OPSC_HYBRID_VPS_TOKEN", "OPSC_VPS_ADMIN_TOKEN", "PDD_ADMIN_TOKEN"}
+    if secret_env:
+        secret_keys.add(secret_env)
+    for key in secret_keys:
         secret = os.environ.get(key)
         if secret:
             redacted = redacted.replace(secret, "<redacted>")

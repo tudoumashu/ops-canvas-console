@@ -9,7 +9,7 @@
 - `opsc ecommerce import-template`：通过 workspace profile/channel `secretRef` 导入已确认远端 PDD template，重建为本地 canonical template。
 - `opsc ecommerce create-run`：基于已导入 hybrid template 创建 pending local run、template snapshot、pending node state 和 `run.waiting_for_executor` event。
 - `opsc executor --run <run_id>`：对 `metadata.hybridEcommerce.backend=vps_pdd` 模板创建远端 run、轮询 overview/product-detail、下载 key artifact，并写回本地 canonical artifact/ref/events/node state。
-- `tools/hybrid_ecommerce_vps_smoke.py`：只编排上述 `opsc` 命令，不直接读写 workspace 文件，不直接调用 VPS API，不打印 secret。
+- `tools/hybrid_ecommerce_vps_smoke.py`：只编排上述 `opsc` 命令，不直接读写 workspace 文件，不直接调用 VPS API，不打印 secret；支持显式 env `secretRef` 或已有 workspace profile/channel 两种凭据路径。
 
 非目标保持不变：
 
@@ -89,7 +89,7 @@ tools/hybrid_ecommerce_vps_smoke.py \
 Observed result:
 
 ```text
-missing required smoke prerequisite: env OPSC_HYBRID_VPS_TOKEN
+missing required smoke prerequisite: --secret-env/OPSC_HYBRID_SECRET_ENV or OPSC_HYBRID_PROFILE_ID/OPSC_HYBRID_CHANNEL_ID
 exit=2
 ```
 
@@ -100,14 +100,39 @@ Redacted evidence:
   "workspace": "<redacted>",
   "remoteUrl": "http://92.9.225.98:18080",
   "remoteTemplateId": "remote_tpl_placeholder",
-  "profile": "default",
-  "channel": "vps",
-  "secretEnv": "OPSC_HYBRID_VPS_TOKEN",
+  "profile": "",
+  "channel": "",
+  "secretEnv": "",
+  "credentialSource": "missing",
   "steps": [],
   "ok": false,
   "missing": [
-    "env OPSC_HYBRID_VPS_TOKEN"
+    "--secret-env/OPSC_HYBRID_SECRET_ENV or OPSC_HYBRID_PROFILE_ID/OPSC_HYBRID_CHANNEL_ID"
   ]
+}
+```
+
+### Smoke Helper Local Orchestration Check
+
+为了确认 helper 不再默认传不存在的 `default/vps` profile/channel，并且能按 `opsc` JSON envelope 正确统计 artifact，本地用临时 fake `opsc` 复测完整编排链路。该检查不接触 workspace 文件，不调用 VPS API。
+
+Observed redacted summary:
+
+```json
+{
+  "workspace": "<redacted>",
+  "remoteUrl": "http://92.9.225.98:18080",
+  "remoteTemplateId": "remote_tpl_placeholder",
+  "profile": "",
+  "channel": "",
+  "secretEnv": "OPSC_HYBRID_VPS_TOKEN",
+  "credentialSource": "envSecretRef",
+  "ok": true,
+  "templateId": "tpl_fake",
+  "runId": "run_fake",
+  "runStatus": "success",
+  "artifactCount": 1,
+  "executorProcessed": 1
 }
 ```
 
