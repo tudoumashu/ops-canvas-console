@@ -9,6 +9,7 @@ Phase 9 Local Workflow Executor MVP 已完成：本轮新增唯一正式入口 `
 - Phase 8.1 closeout：修复 MCP `opsc_workspace_info` 默认输出泄露本地 serve URL，新增 active serve runtime redaction 回归测试；用真实 `opsc` 二进制和临时 workspace 复验 MCP tools/list、workspace info/doctor/export plan/GC dry-run、template/run/artifact/profile/project/asset/prompt list、active index rebuild 和 inactive index rebuild，Phase 8 手工验收可关闭。
 - Phase 9 新增 `internal/localworkspace` executor：run 领取与恢复、拓扑执行、固定本地素材复制为 canonical artifact、text/image generation provider 调用、node/run 状态更新、事件写入、artifact/ref 写入和已成功节点跳过。
 - Phase 9 新增 `cmd/opsc` 的 `executor` 命令，支持 `--workspace` 和 `--run`，JSON 输出沿用 `{ ok, data, warnings }`，workflow 失败写入 run error，基础设施错误才作为 CLI 非 0。
+- Phase 9 收口继续补充 executor 写入后的 index rebuild 回归，并用 `/tmp/opsc-phase9-manual` fake provider 手工 smoke 验证 `opsc executor` 可把固定本地素材、文本生成和图片生成 run 执行到 success；真实浏览器 Web UI 端到端仍保留在 `docs/pending-test.md`。
 - Phase 8 新增稳定化验证：`opsc serve` state/session/auth/redaction、CLI `serve` 输出脱敏、AI proxy `secretRef` 与浏览器 header 隔离、MCP stdio 工具面冻结和诊断/plan/index rebuild smoke、本地模板草稿 run -> canonical artifact -> run artifact ref happy path；同步 README、features、contract、pending-test、todo、CHANGELOG、项目记忆和中央 Wiki。
 - 已和用户拍板 local-first 数据分离基线：私有模板、run、artifact、个人素材、个人 prompt、本地项目路径和本地日志默认本地；云端只保留账号/授权/计费、公共模板、公共素材和商用 profile 能力。
 - 已确认默认 workspace 为 `~/OpsCanvas`，支持多 workspace；项目文件只保存外部路径引用，不复制进 workspace；生成 artifact 复制进 workspace；secrets 不写普通 JSON；`opsc serve` 使用本地随机 bearer token 或 browser session。
@@ -125,6 +126,8 @@ Phase 9 Local Workflow Executor MVP 已完成：本轮新增唯一正式入口 `
 - passed：Phase 8.1 已用真实 `opsc` 二进制、临时 workspace 和 active/inactive `opsc serve` 执行 MCP 目标手工验收；证据为 `/tmp/opsc-phase8-1/evidence-F-mcp-phase8-1.json`，结果 pass。
 - passed：Phase 9 已用 Docker `golang:1.25-alpine` 执行 `gofmt -w internal/localworkspace/serve_ai_proxy.go internal/localworkspace/executor.go internal/localworkspace/executor_test.go cmd/opsc/main.go cmd/opsc/main_test.go`。
 - passed：Phase 9 已运行 `GOPROXY=https://goproxy.cn,direct go test ./internal/localworkspace ./cmd/opsc`，覆盖 executor 固定素材/text/image happy path、secretRef provider 调用、running run 恢复跳过已成功节点、CLI `opsc executor --json` 最小执行和既有 serve/MCP 回归。
+- passed：Phase 9 收口已补充 executor 写入后删除并重建 `index.sqlite` 的回归，确认重建后 `GetRunStatus`、node states、event sequence 和 `ListRunArtifactSummaries` 仍正确；已再次运行 Docker `gofmt` 和 `GOPROXY=https://goproxy.cn,direct go test ./internal/localworkspace ./cmd/opsc`。
+- passed manual：Phase 9 fake provider CLI smoke 已通过，证据位于 `/tmp/opsc-phase9-manual/evidence-summary.json` 和 `docs/manual-test-report-phase9.md`；结果为 `executorProcessed=1`、run `success`、4 个 node state `success`、3 个 artifact/ref、fake provider 路径为 `/v1/chat/completions` 与 `/v1/images/generations`，未收到 browser cookie。
 - passed：Phase 0 文档变更已运行 `git diff --check`，diff 范围只包含 Markdown/Mermaid 文档。
 - passed：中央 Wiki 已运行 `lint_wiki.sh`、`reindex_qmd.sh llm-wiki` 和 `qmd embed`。
 - passed：Phase 1 已用 Docker `golang:1.25-alpine` 执行 `gofmt -w internal/localworkspace cmd/opsc`。

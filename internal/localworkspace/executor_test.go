@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -123,6 +124,28 @@ func TestRunExecutorOnceExecutesFixedMaterialTextAndImage(t *testing.T) {
 	}
 	if len(refs) != 3 {
 		t.Fatalf("artifact refs after second run = %d, want 3", len(refs))
+	}
+	assertNoExecutorSecretLeak(t, status, events, refs)
+
+	if err := os.Remove(filepath.Join(root, IndexFileName)); err != nil {
+		t.Fatalf("remove index: %v", err)
+	}
+	if _, err := RebuildIndex(context.Background(), workspace, SQLiteIndexRebuilder{}, ScanOptions{}); err != nil {
+		t.Fatalf("RebuildIndex() error = %v", err)
+	}
+	rebuiltStatus, err := GetRunStatus(workspace, run.ID)
+	if err != nil {
+		t.Fatalf("GetRunStatus() after rebuild error = %v", err)
+	}
+	if rebuiltStatus.Run.Status != RunStatusSuccess || len(rebuiltStatus.Nodes) != 4 || rebuiltStatus.LatestEventSequence == 0 {
+		t.Fatalf("rebuilt run status = %#v, want success with nodes and events", rebuiltStatus)
+	}
+	rebuiltRefs, err := ListRunArtifactSummaries(workspace, run.ID)
+	if err != nil {
+		t.Fatalf("ListRunArtifactSummaries() after rebuild error = %v", err)
+	}
+	if len(rebuiltRefs) != 3 {
+		t.Fatalf("rebuilt run artifact refs = %d, want 3", len(rebuiltRefs))
 	}
 }
 
@@ -331,4 +354,17 @@ func runEventTypesContain(events []RunEventEnvelope, eventType string) bool {
 		}
 	}
 	return false
+}
+
+func assertNoExecutorSecretLeak(t *testing.T, values ...any) {
+	t.Helper()
+	for _, value := range values {
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("marshal value for secret leak check: %v", err)
+		}
+		if strings.Contains(string(data), "provider-secret") {
+			t.Fatalf("executor output leaked provider secret: %s", data)
+		}
+	}
 }
