@@ -33,6 +33,7 @@ XDG_STATE_HOME=/tmp/opsc-phase8-1/state /tmp/opsc-phase8-1/bin/opsc --workspace 
 - 截图：`/tmp/opsc-phase8/screenshots/`
 - fake provider 请求日志：`/tmp/opsc-phase8/fake-openai-requests.jsonl`
 - Phase 8.1 MCP 复验证据：`/tmp/opsc-phase8-1/evidence-F-mcp-phase8-1.json`
+- Phase 8.1 MCP 目标重跑证据：`/tmp/opsc-phase8-1-rerun/evidence-F-mcp-rerun.json`
 
 ## 验收结果
 
@@ -43,7 +44,7 @@ XDG_STATE_HOME=/tmp/opsc-phase8-1/state /tmp/opsc-phase8-1/bin/opsc --workspace 
 | C. 素材、提示词、画布、workbench | PASS，提示词显式导入/导出 UI 未覆盖 | `/tmp/opsc-phase8/evidence-C-local-data-workbench.json` |
 | D. 项目面板、preferences、断连阻断 | PASS | `/tmp/opsc-phase8/evidence-D-projects-preferences.json` |
 | E. 模板、run、artifact、workspace 缓存隔离 | PASS | `/tmp/opsc-phase8/evidence-E-templates-runs-artifacts.json` |
-| F. MCP 只读 client 回归 | PASS | 原始失败证据：`/tmp/opsc-phase8/evidence-F-mcp.json`；Phase 8.1 复验证据：`/tmp/opsc-phase8-1/evidence-F-mcp-phase8-1.json` |
+| F. MCP 只读 client 回归 | PASS | 原始失败证据：`/tmp/opsc-phase8/evidence-F-mcp.json`；Phase 8.1 复验证据：`/tmp/opsc-phase8-1/evidence-F-mcp-phase8-1.json`；目标重跑证据：`/tmp/opsc-phase8-1-rerun/evidence-F-mcp-rerun.json` |
 
 ## 关键检查记录
 
@@ -116,6 +117,7 @@ XDG_STATE_HOME=/tmp/opsc-phase8-1/state /tmp/opsc-phase8-1/bin/opsc --workspace 
 
 - 自动化：新增 `TestMCPWorkspaceInfoRedactsActiveRuntimeURL`，覆盖 active `opsc serve` 下 MCP `workspace_info` 不泄露 `baseUrl/host/port/pid/tokenFile/launchSecretFile`，且 structuredContent 中 runtime 只剩 `active=true`。
 - 手工：使用真实 `opsc` 二进制和临时 workspace 复验 MCP `initialize`、`tools/list`、workspace info/doctor/export plan/GC dry-run、template/run/artifact/profile/project/asset/prompt list、active index rebuild 和 inactive index rebuild；结果见 `/tmp/opsc-phase8-1/evidence-F-mcp-phase8-1.json`。
+- 目标重跑：再次使用临时 workspace 与真实 `opsc` 二进制重跑 F 项 MCP stdio 证据链，`tools/list` 仍为 14 个只读/诊断工具，未出现对象 create/update/delete/import/append 类 mutation tool；`opsc_workspace_info` 的 `runtime` 仍只包含 `active=true`，active index rebuild 成功，inactive index rebuild 按预期返回 tool error；结果见 `/tmp/opsc-phase8-1-rerun/evidence-F-mcp-rerun.json`。
 
 ### Non-blocking：提示词导入/导出 UI 验收标准需要确认
 
