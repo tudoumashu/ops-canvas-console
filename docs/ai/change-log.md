@@ -1,5 +1,15 @@
 # AI 项目记忆变更记录
 
+## 2026-05-31 | Hybrid Ecommerce VPS smoke helper and probe | commit: pending
+
+- 目标：为 Phase 11 真实 VPS API smoke 留下可重复执行的最小证据链路，避免后续手工串命令时绕过 local workspace canonical/source 和 `opsc` 边界。
+- 变更：新增 `tools/hybrid_ecommerce_vps_smoke.py`，只编排 `opsc ecommerce import-template`、`opsc ecommerce create-run`、`opsc executor --run`、`opsc run status` 和 `opsc artifact list --run`；不直接读取 workspace 文件、不直接调用 VPS API、不打印 secret，并可写出 redacted evidence JSON。新增 `docs/manual-test-report-phase11.md` 记录当前目标 VPS probe、缺失 env/template 前置条件和后续复测命令。
+- 原因：Phase 11 的真实验收必须证明本地 canonical run 能触发 VPS PDD API 并同步 artifact；当前网络/credential 条件不足，应把失败前置条件记录为可复现证据，而不是把 smoke 误写成通过。
+- 验证：已运行 `python -m py_compile tools/hybrid_ecommerce_vps_smoke.py`；已用缺失 `OPSC_HYBRID_VPS_TOKEN` 的场景执行 helper，返回 exit 2，并生成只含 redacted workspace、remote URL、template placeholder 和 missing env 的 evidence。最新网络 probe 显示目标 `92.9.225.98` 的 TCP 22/443/80/18080/13000 可连通，但 SSH banner/key exchange 和 HTTP(S) health 仍不可用。
+- 影响：只新增 smoke helper 和文档/项目记忆；不改业务代码、不改 Web UI、不扩大 MCP 写面、不迁移旧 PDD/VPS run。
+- 风险：真实 VPS API smoke 仍未完成；需要可达 API、真实 admin credential 和已确认 template id 后重新执行 helper。
+- 后续：拿到前置条件后执行 `tools/hybrid_ecommerce_vps_smoke.py --workspace ~/OpsCanvas --input-file /path/to/hybrid-input.json --evidence /tmp/opsc-phase11-vps-smoke.json`，并把结果更新到 `docs/manual-test-report-phase11.md`。
+
 ## 2026-05-31 | Hybrid Ecommerce headless local run draft | commit: pending
 
 - 目标：补齐 Phase 11 hybrid ecommerce 的 headless 本地 run 创建路径，让 CLI 可以在不经过浏览器、不直接调用 VPS API 的情况下，从已导入模板创建 canonical local run 草稿。
