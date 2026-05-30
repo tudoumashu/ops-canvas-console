@@ -1,5 +1,15 @@
 # AI 项目记忆变更记录
 
+## 2026-05-30 | Hybrid Ecommerce VPS backend MVP | commit: pending
+
+- 目标：在不迁移现有 PDD/VPS run、不把 VPS run dir 当事实源、不扩大 MCP 写面的前提下，先接通一个已确认电商模板的 local workspace -> VPS API 真实执行路径。
+- 变更：新增 `internal/localworkspace/hybrid_ecommerce.go`，提供远端 PDD template 导入、hybrid template metadata、profile/channel `secretRef` 解析、远端 run 创建、overview/product-detail 轮询和 artifact 下载同步；`opsc executor` 遇到 `hybridEcommerce.backend=vps_pdd` 模板时走 VPS PDD API backend，并把本地 run/node state/events/artifact ref 作为 canonical；新增 `opsc ecommerce import-template` CLI。
+- 原因：用户计划把自用 local workspace 作为事实源，同时让 VPS 作为已存在电商工作流的真实执行后端；浏览器仍只能连接 `opsc serve`，不能保存或发送 VPS admin credential。
+- 验证：已用 Docker `golang:1.25-alpine` 执行 `/usr/local/go/bin/gofmt`；已运行 `/usr/local/go/bin/go test ./internal/localworkspace ./cmd/opsc`，覆盖 CLI 导入脱敏、profile/channel secretRef、远端 run start/status/artifact sync、workspace 不写明文 token 或远端 runDir、重复 executor 不重复同步 success run。
+- 影响：新增 local workspace hybrid backend 和 CLI 子命令；不改旧 `main.go`、router、service、repository、DB 行为，不改 Web UI 直接调用路径，不迁移 PDD/VPS run 历史，不扩大 MCP mutation surface。
+- 风险：真实 VPS smoke 仍依赖可用 admin token 和已确认 remote template id；当前只同步 overview/product-detail 和关键 artifact，不做远端细粒度事件流、取消/重试控制、危险运维动作或历史 run 导入。
+- 后续：下一阶段优先做真实 VPS credential/template id smoke、Web UI 一条 hybrid run 浏览器回归、远端事件增量同步和 `image_edit`/`video_generation`/复杂 guardrail 的 executor 扩展。
+
 ## 2026-05-30 | Local Workflow Executor Phase 10 project-aware 收口 | commit: pending
 
 - 目标：在不扩大 MCP 写面、不迁移 PDD/VPS run 的前提下，把 Phase 9 executor MVP 接到本地项目 capability/path guard，并补齐最小 `condition`/`script` 执行链路。

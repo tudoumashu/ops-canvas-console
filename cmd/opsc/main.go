@@ -17,16 +17,21 @@ import (
 )
 
 type cliOptions struct {
-	Workspace string
-	JSON      bool
-	ShowPaths bool
-	Name      string
-	RunID     string
-	Follow    bool
-	Host      string
-	Port      int
-	Origins   []string
-	Command   []string
+	Workspace        string
+	JSON             bool
+	ShowPaths        bool
+	Name             string
+	RunID            string
+	Follow           bool
+	Host             string
+	Port             int
+	Origins          []string
+	RemoteURL        string
+	RemoteTemplateID string
+	ProfileID        string
+	ChannelID        string
+	SecretEnv        string
+	Command          []string
 }
 
 type successEnvelope struct {
@@ -85,6 +90,8 @@ func runWithContext(ctx context.Context, args []string, stdout io.Writer, stderr
 		return runServeCommand(ctx, opts, stdout, stderr)
 	case "executor":
 		return runExecutorCommand(ctx, opts, stdout, stderr)
+	case "ecommerce":
+		return runEcommerceCommand(ctx, opts, stdout, stderr)
 	case "mcp":
 		return runMCPCommand(ctx, opts, stdout, stderr)
 	default:
@@ -146,6 +153,45 @@ func runExecutorCommand(ctx context.Context, opts cliOptions, stdout io.Writer, 
 		}
 		fmt.Fprintln(stdout, line)
 	}
+	for _, warning := range result.Warnings {
+		fmt.Fprintf(stderr, "warning: %s\n", warning)
+	}
+	return 0
+}
+
+func runEcommerceCommand(ctx context.Context, opts cliOptions, stdout io.Writer, stderr io.Writer) int {
+	if len(opts.Command) < 2 {
+		return writeError(stderr, opts.JSON, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "missing ecommerce subcommand", 1, nil))
+	}
+	switch opts.Command[1] {
+	case "import-template":
+		return runEcommerceImportTemplate(ctx, opts, stdout, stderr)
+	default:
+		return writeError(stderr, opts.JSON, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "unknown ecommerce subcommand: "+opts.Command[1], 1, nil))
+	}
+}
+
+func runEcommerceImportTemplate(ctx context.Context, opts cliOptions, stdout io.Writer, stderr io.Writer) int {
+	result, err := localworkspace.ImportHybridEcommerceTemplate(ctx, localworkspace.HybridEcommerceImportOptions{
+		WorkspacePath:    opts.Workspace,
+		BaseURL:          opts.RemoteURL,
+		RemoteTemplateID: opts.RemoteTemplateID,
+		ProfileID:        opts.ProfileID,
+		ChannelID:        opts.ChannelID,
+		SecretEnv:        opts.SecretEnv,
+	})
+	if err != nil {
+		return writeError(stderr, opts.JSON, asCLIError(err))
+	}
+	if opts.JSON {
+		return writeSuccess(stdout, result, result.Warnings)
+	}
+	action := "Updated"
+	if result.Created {
+		action = "Imported"
+	}
+	fmt.Fprintf(stdout, "%s ecommerce template %s\n", action, result.Template.ID)
+	fmt.Fprintf(stdout, "Remote template: %s\n", result.RemoteTemplateID)
 	for _, warning := range result.Warnings {
 		fmt.Fprintf(stderr, "warning: %s\n", warning)
 	}
@@ -697,6 +743,46 @@ func parseArgs(args []string) (cliOptions, error) {
 			opts.RunID = args[i]
 		case strings.HasPrefix(arg, "--run="):
 			opts.RunID = strings.TrimPrefix(arg, "--run=")
+		case arg == "--remote-url":
+			i++
+			if i >= len(args) {
+				return opts, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "--remote-url requires a value", 1, nil)
+			}
+			opts.RemoteURL = args[i]
+		case strings.HasPrefix(arg, "--remote-url="):
+			opts.RemoteURL = strings.TrimPrefix(arg, "--remote-url=")
+		case arg == "--remote-template":
+			i++
+			if i >= len(args) {
+				return opts, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "--remote-template requires a value", 1, nil)
+			}
+			opts.RemoteTemplateID = args[i]
+		case strings.HasPrefix(arg, "--remote-template="):
+			opts.RemoteTemplateID = strings.TrimPrefix(arg, "--remote-template=")
+		case arg == "--profile":
+			i++
+			if i >= len(args) {
+				return opts, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "--profile requires a value", 1, nil)
+			}
+			opts.ProfileID = args[i]
+		case strings.HasPrefix(arg, "--profile="):
+			opts.ProfileID = strings.TrimPrefix(arg, "--profile=")
+		case arg == "--channel":
+			i++
+			if i >= len(args) {
+				return opts, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "--channel requires a value", 1, nil)
+			}
+			opts.ChannelID = args[i]
+		case strings.HasPrefix(arg, "--channel="):
+			opts.ChannelID = strings.TrimPrefix(arg, "--channel=")
+		case arg == "--secret-env":
+			i++
+			if i >= len(args) {
+				return opts, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "--secret-env requires a value", 1, nil)
+			}
+			opts.SecretEnv = args[i]
+		case strings.HasPrefix(arg, "--secret-env="):
+			opts.SecretEnv = strings.TrimPrefix(arg, "--secret-env=")
 		case strings.HasPrefix(arg, "-"):
 			return opts, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "unknown flag: "+arg, 1, nil)
 		default:

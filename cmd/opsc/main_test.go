@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -404,6 +407,67 @@ func TestExecutorCommandJSONProcessesTextStaticRun(t *testing.T) {
 	}
 	if snapshot.Run.Status != localworkspace.RunStatusSuccess || snapshot.Run.ArtifactCount != 1 {
 		t.Fatalf("run snapshot = %#v, want success with artifact", snapshot.Run)
+	}
+}
+
+func TestEcommerceImportTemplateCommandJSONRedactsSecretAndPath(t *testing.T) {
+	t.Setenv("OPSC_HYBRID_CLI_TOKEN", "cli-remote-secret")
+	root := filepath.Join(t.TempDir(), "workspace")
+	result, err := localworkspace.Init(localworkspace.InitOptions{Path: root, Name: "Hybrid CLI Workspace"})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	workspace := result.Workspace
+	var gotAuth string
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet || r.URL.Path != "/api/admin/workflows/pdd/templates/remote_tpl" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, `{"code":0,"data":{"id":"remote_tpl","workflowType":"pdd","title":"CLI Ecommerce","spec":{"version":1,"nodes":[],"edges":[],"settings":{}}},"msg":"ok"}`)
+	}))
+	defer remote.Close()
+	profile, err := localworkspace.NewProfile(workspace, localworkspace.ProfileData{
+		Name: "Hybrid VPS",
+		Mode: localworkspace.ProfileModeHybrid,
+		Channels: []localworkspace.ProfileChannel{{
+			ID:        "vps",
+			Protocol:  "ops-canvas-vps",
+			BaseURL:   remote.URL,
+			Enabled:   true,
+			SecretRef: &localworkspace.SecretRef{Type: localworkspace.SecretRefTypeEnv, Name: "OPSC_HYBRID_CLI_TOKEN"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewProfile() error = %v", err)
+	}
+	if err := localworkspace.WriteProfile(workspace, profile); err != nil {
+		t.Fatalf("WriteProfile() error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"ecommerce", "import-template", "--workspace", root, "--remote-template", "remote_tpl", "--profile", profile.ID, "--channel", "vps", "--json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("ecommerce import-template exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %s, want empty", stderr.String())
+	}
+	if gotAuth != "Bearer cli-remote-secret" {
+		t.Fatalf("auth = %q, want secretRef bearer", gotAuth)
+	}
+	for _, want := range []string{`"ok": true`, `"created": true`, `"remoteTemplateId": "remote_tpl"`, `"title": "CLI Ecommerce"`} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	for _, secret := range []string{root, "cli-remote-secret"} {
+		if strings.Contains(stdout.String(), secret) || strings.Contains(stderr.String(), secret) {
+			t.Fatalf("CLI output leaked %q:\nstdout=%s\nstderr=%s", secret, stdout.String(), stderr.String())
+		}
 	}
 }
 

@@ -203,6 +203,11 @@ func executeLocalRun(ctx context.Context, workspace Workspace, run Envelope[RunD
 	if err != nil {
 		return failRunResult(workspace, run, runResult, err)
 	}
+	if config, ok, err := hybridEcommerceConfigFromRunTemplate(run, template); err != nil {
+		return failRunResult(workspace, run, runResult, err)
+	} else if ok {
+		return executeHybridEcommerceRun(ctx, workspace, run, template, opts, config)
+	}
 	nodes, err := parseExecutorNodes(template.Data.Nodes)
 	if err != nil {
 		return failRunResult(workspace, run, runResult, err)
