@@ -339,6 +339,74 @@ func TestRunEventsFollowCommandJSONL(t *testing.T) {
 	}
 }
 
+func TestExecutorCommandJSONProcessesTextStaticRun(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspace")
+	result, err := localworkspace.Init(localworkspace.InitOptions{Path: root, Name: "Executor CLI Workspace"})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	workspace := result.Workspace
+	template, err := localworkspace.NewTemplate(workspace, localworkspace.TemplateData{
+		Title:        "Executor CLI Template",
+		WorkflowType: "generic",
+		Version:      1,
+		Nodes: []json.RawMessage{
+			json.RawMessage(`{"id":"copy","type":"text_static","operation":"text_static","title":"Copy","prompt":"Hello {{input.productTitle}}"}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewTemplate() error = %v", err)
+	}
+	if err := localworkspace.WriteTemplate(workspace, template); err != nil {
+		t.Fatalf("WriteTemplate() error = %v", err)
+	}
+	runDoc, err := localworkspace.NewRun(workspace, localworkspace.RunData{
+		TemplateID: template.ID,
+		Status:     localworkspace.RunStatusPending,
+		Input:      map[string]any{"productTitle": "Mug"},
+	})
+	if err != nil {
+		t.Fatalf("NewRun() error = %v", err)
+	}
+	if err := localworkspace.WriteRun(workspace, runDoc); err != nil {
+		t.Fatalf("WriteRun() error = %v", err)
+	}
+	if _, err := localworkspace.AppendRunEvent(workspace, runDoc.ID, localworkspace.RunEventInput{
+		Type:    "run.waiting_for_executor",
+		Level:   "info",
+		Actor:   localworkspace.RunEventActor{Type: "web", ID: "ops-canvas-web"},
+		Message: "Local run draft created",
+		Data:    map[string]any{"mode": "local"},
+	}); err != nil {
+		t.Fatalf("AppendRunEvent() error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"executor", "--workspace", root, "--run", runDoc.ID, "--json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("executor exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %s, want empty", stderr.String())
+	}
+	for _, want := range []string{`"ok": true`, `"processed": 1`, `"status": "success"`, `"executed": 1`, `"artifactRefs": 1`} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), root) {
+		t.Fatalf("stdout leaked workspace path: %s", stdout.String())
+	}
+	snapshot, err := localworkspace.GetRunStatus(workspace, runDoc.ID)
+	if err != nil {
+		t.Fatalf("GetRunStatus() error = %v", err)
+	}
+	if snapshot.Run.Status != localworkspace.RunStatusSuccess || snapshot.Run.ArtifactCount != 1 {
+		t.Fatalf("run snapshot = %#v, want success with artifact", snapshot.Run)
+	}
+}
+
 func TestServeCommandJSONOutputsRuntimeWithoutToken(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
 	root := filepath.Join(t.TempDir(), "workspace")

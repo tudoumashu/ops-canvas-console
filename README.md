@@ -60,9 +60,13 @@ docker compose -f docker-compose.local.yml up -d --build
 ```bash
 go run ./cmd/opsc workspace init --workspace ~/OpsCanvas
 go run ./cmd/opsc serve --workspace ~/OpsCanvas --origin http://localhost:3000
+# 另开一个终端执行本地工作流 run
+go run ./cmd/opsc executor --workspace ~/OpsCanvas
 ```
 
 `opsc serve` 默认只监听 `127.0.0.1`，runtime metadata、`bearer.token`、一次性 `launch.secret` 和 session 文件写在 workspace 之外的 XDG state 目录。浏览器只保存 loopback `baseUrl`，不保存 token、launch secret 或 workspace 绝对路径，也不直接写 `~/OpsCanvas`。
+
+`opsc executor` 是当前唯一正式的本地工作流执行入口。它会领取 local workspace 中 `run.waiting_for_executor` 的 run，按最小节点集执行固定本地素材、文本生成和图片生成，并把节点状态、事件和产物写回 workspace canonical files。
 
 MCP 集成使用 `opsc mcp --workspace <path>`。MCP 只是 CLI/core/`opsc serve` 的薄封装，不是新的事实源；当前主要暴露只读、诊断和通过 active `opsc serve` 重建派生索引的维护能力。
 

@@ -3,10 +3,12 @@ flowchart LR
   Agent --> MCP["opsc mcp stdio"]
   Browser["Web UI"] -- "launch secret -> session" --> Serve["opsc serve"]
   Browser --> BrowserCache[("UI cache")]
+  CLI --> Executor["opsc executor"]
   MCP -- "read/diagnostic tools" --> CLI
   MCP -- "index rebuild tool" --> Serve
   Serve --> Core["internal/localworkspace"]
   CLI --> Core
+  Executor --> Core
   Core --> IndexOps["index update / rebuild"]
   Core --> ExportPlan["export plan rules"]
   Core --> GCPlan["gc dry-run plan"]
@@ -64,6 +66,8 @@ flowchart LR
   Serve -. "canvas projects" .-> CanvasProjects
   Serve -. "canvas media" .-> CanvasFiles
   Serve -. "workbench logs" .-> WorkbenchLogs
+  Executor -. "node state / events" .-> Runs
+  Executor -. "artifact files / refs" .-> Artifacts
 
   ExportPlan -. "exclude control dirs" .-> Control
   ExportPlan -. "exclude root salt" .-> RootSalt
@@ -80,4 +84,5 @@ flowchart LR
   ProjectGuard --> Projects
   Projects -. "path refs only" .-> LocalProjects["external local projects"]
   Profiles -. "env/keychain refs" .-> ModelProviders["model providers"]
+  Executor -. "OpenAI-compatible" .-> ModelProviders
   CLI -. "explicit publish/upload/share" .-> Cloud["cloud / VPS"]

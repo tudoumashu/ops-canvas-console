@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [新增] Local Workflow Executor MVP：新增 `opsc executor`，可领取 local workspace 中 `waiting_for_executor` run，执行固定本地素材、文本生成和图片生成节点，并写回 canonical node state、events、artifact 与 run artifact ref。
 + [修复] MCP `opsc_workspace_info` 默认输出不再暴露本地 `opsc serve` URL、host 或 port，Phase 8 手工验收已收口为可关闭状态。
 + [优化] Local Workspace v1 Phase 8 稳定化：补充 `opsc serve` 鉴权/redaction、CLI 输出脱敏、AI `secretRef` proxy、MCP stdio wrapper 工具面冻结和本地模板草稿 run/artifact ref 的回归验证。
 + [文档] 同步 README、功能说明、待测试和 TODO，明确 local workspace 是本机私有事实源，浏览器只保留缓存/临时状态，旧浏览器测试数据和现有 PDD/VPS run 不迁移。

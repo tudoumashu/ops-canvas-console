@@ -58,12 +58,16 @@ func (api *serveAPI) selectAIProxyChannel(r *http.Request) (ProfileChannel, erro
 	if channelID == "" {
 		channelID = strings.TrimSpace(r.Header.Get("X-Opsc-Channel-Id"))
 	}
-	profiles, err := ListProfiles(api.workspace)
+	return selectLocalAIChannel(api.workspace, profileID, channelID)
+}
+
+func selectLocalAIChannel(workspace Workspace, profileID string, channelID string) (ProfileChannel, error) {
+	profiles, err := ListProfiles(workspace)
 	if err != nil {
 		return ProfileChannel{}, err
 	}
 	if profileID == "" {
-		profileID = strings.TrimSpace(api.workspace.Document.Data.DefaultProfileID)
+		profileID = strings.TrimSpace(workspace.Document.Data.DefaultProfileID)
 	}
 	if profileID != "" {
 		for _, profile := range profiles {

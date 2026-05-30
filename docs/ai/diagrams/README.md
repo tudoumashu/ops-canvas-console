@@ -8,7 +8,7 @@
 - `request-flow.mmd`：回答“用户通过后端远程渠道发起 AI 请求时，鉴权、计费、渠道选择和失败返还如何流动”。
 - `data-flow.mmd`：回答“画布、本地素材/提示词/私有模板/工作台记录缓存、local workspace、公共提示词、服务器素材、PDD run 和视频文件分别存在哪里”。
 - `deployment-flow.mmd`：回答“本地开发、普通 Docker、PDD console Docker、Render 和 GHCR 发布路径是什么”。
-- `local-workspace-v1.mmd`：回答“local-first workspace、opsc CLI、opsc serve runtime、Web UI、MCP 和云端边界如何连接”。
+- `local-workspace-v1.mmd`：回答“local-first workspace、opsc CLI、opsc serve runtime、opsc executor、Web UI、MCP 和云端边界如何连接”。
 - `user-flow-canvas-generation.mmd`：回答“画布生成节点在本地直连和后端远程渠道下如何生成并保存结果”。
 - `user-flow-pdd-workflow.mmd`：回答“管理员如何用模板启动 PDD custom run，并在运行页查看结果或走 local agent 脚本节点”。
 

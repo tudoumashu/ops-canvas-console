@@ -83,6 +83,8 @@ func runWithContext(ctx context.Context, args []string, stdout io.Writer, stderr
 		return runPromptCommand(opts, stdout, stderr)
 	case "serve":
 		return runServeCommand(ctx, opts, stdout, stderr)
+	case "executor":
+		return runExecutorCommand(ctx, opts, stdout, stderr)
 	case "mcp":
 		return runMCPCommand(ctx, opts, stdout, stderr)
 	default:
@@ -118,6 +120,34 @@ func runServeCommand(ctx context.Context, opts cliOptions, stdout io.Writer, std
 			return asCLIError(err).ExitCode
 		}
 		return writeError(stderr, opts.JSON, asCLIError(err))
+	}
+	return 0
+}
+
+func runExecutorCommand(ctx context.Context, opts cliOptions, stdout io.Writer, stderr io.Writer) int {
+	if len(opts.Command) != 1 {
+		return writeError(stderr, opts.JSON, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "executor does not accept subcommands", 1, nil))
+	}
+	result, err := localworkspace.RunExecutorOnce(ctx, localworkspace.ExecutorOptions{
+		WorkspacePath: opts.Workspace,
+		RunID:         opts.RunID,
+	})
+	if err != nil {
+		return writeError(stderr, opts.JSON, asCLIError(err))
+	}
+	if opts.JSON {
+		return writeSuccess(stdout, result, result.Warnings)
+	}
+	fmt.Fprintf(stdout, "Executor processed %d run(s)\n", result.Processed)
+	for _, run := range result.Runs {
+		line := fmt.Sprintf("- %s\t%s\texecuted=%d\tskipped=%d\tartifacts=%d", run.RunID, run.Status, run.Executed, run.Skipped, run.ArtifactRefs)
+		if run.Error != "" {
+			line += "\terror=" + run.Error
+		}
+		fmt.Fprintln(stdout, line)
+	}
+	for _, warning := range result.Warnings {
+		fmt.Fprintf(stderr, "warning: %s\n", warning)
 	}
 	return 0
 }

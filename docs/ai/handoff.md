@@ -2,11 +2,13 @@
 
 ## Current Objective
 
-Phase 8.1 Local Workspace v1 closeout 已完成：本轮只修复并验证 MCP `opsc_workspace_info` 默认输出泄露本地 serve URL 的问题，不进入 Phase 9、不新增 local executor、不迁移现有 PDD/VPS run、不做 Full GC、不扩大 MCP 写能力、不新增 canonical object 类型。`opsc_workspace_info` 默认输出中的 `runtime` 已缩减为 `active`，不再暴露 `baseUrl/host/port/pid/tokenFile/launchSecretFile`；CLI `workspace info`、`opsc serve`、`opsc_workspace_index_rebuild` 和 Web UI 本地连接语义保持不变。Phase 8 手工验收 A-F 已收口为可关闭状态，剩余真实 agent 客户端展示层 spot check、真实模型账号 live call 和提示词显式导入/导出 UI 确认为非阻塞后续项。
+Phase 9 Local Workflow Executor MVP 已完成：本轮新增唯一正式入口 `opsc executor --workspace <path>`，把 local workspace 的 `run.waiting_for_executor` 接到本地 run-once 执行链路。executor 可领取 pending run 或恢复已接管的 running run，执行 `input`、`text_static`、固定本地素材 `material_lookup`、`text_generation`、`image_generation`，复用 workspace profile `secretRef` 调 OpenAI-compatible provider，并写回 canonical node state、append-only events、global artifact 与 run artifact ref。仍不迁移现有 PDD/VPS run，不扩大 MCP 写面，不做 Full GC、分布式调度、完整 project adapter 或其它节点类型。
 
 ## Completed Work
 
 - Phase 8.1 closeout：修复 MCP `opsc_workspace_info` 默认输出泄露本地 serve URL，新增 active serve runtime redaction 回归测试；用真实 `opsc` 二进制和临时 workspace 复验 MCP tools/list、workspace info/doctor/export plan/GC dry-run、template/run/artifact/profile/project/asset/prompt list、active index rebuild 和 inactive index rebuild，Phase 8 手工验收可关闭。
+- Phase 9 新增 `internal/localworkspace` executor：run 领取与恢复、拓扑执行、固定本地素材复制为 canonical artifact、text/image generation provider 调用、node/run 状态更新、事件写入、artifact/ref 写入和已成功节点跳过。
+- Phase 9 新增 `cmd/opsc` 的 `executor` 命令，支持 `--workspace` 和 `--run`，JSON 输出沿用 `{ ok, data, warnings }`，workflow 失败写入 run error，基础设施错误才作为 CLI 非 0。
 - Phase 8 新增稳定化验证：`opsc serve` state/session/auth/redaction、CLI `serve` 输出脱敏、AI proxy `secretRef` 与浏览器 header 隔离、MCP stdio 工具面冻结和诊断/plan/index rebuild smoke、本地模板草稿 run -> canonical artifact -> run artifact ref happy path；同步 README、features、contract、pending-test、todo、CHANGELOG、项目记忆和中央 Wiki。
 - 已和用户拍板 local-first 数据分离基线：私有模板、run、artifact、个人素材、个人 prompt、本地项目路径和本地日志默认本地；云端只保留账号/授权/计费、公共模板、公共素材和商用 profile 能力。
 - 已确认默认 workspace 为 `~/OpsCanvas`，支持多 workspace；项目文件只保存外部路径引用，不复制进 workspace；生成 artifact 复制进 workspace；secrets 不写普通 JSON；`opsc serve` 使用本地随机 bearer token 或 browser session。
@@ -83,7 +85,7 @@ Phase 8.1 Local Workspace v1 closeout 已完成：本轮只修复并验证 MCP `
 
 ## In Progress
 
-- Phase 7 还未覆盖全部 workflow 执行边界：local run 目前只能在创建时 materialize 固定本地素材 artifact，其它节点仍是 pending 草稿/记录；真实 PDD/VPS executor、PDD/VPS run 数据迁移，以及运行时 `material_lookup` 自动匹配本地素材仍待迁移或审计。
+- Phase 9 executor 仍是 MVP：只覆盖固定本地素材、文本生成、图片生成和最小辅助节点；`image_edit`、`video_generation`、条件、脚本、完整模板重试策略、project adapter、自动素材匹配和真实 PDD/VPS run 迁移仍待后续阶段。
 
 ## Blockers
 
@@ -104,11 +106,11 @@ Phase 8.1 Local Workspace v1 closeout 已完成：本轮只修复并验证 MCP `
 
 ## Next Recommended Steps
 
-- 下一阶段：设计并实现真实 local workflow executor，把 pending local run 接到可执行队列、PDD/local project adapter 和 artifact 产物写入；如需扩展 MCP，只在已有 CLI/core 或 `opsc serve` 能力上增加写入型工具，不重复实现业务逻辑。
-- run/artifact 写入 HTTP API 已暴露给本地 Web adapter；下一阶段要补执行器鉴权/actor 约束、事件语义和失败恢复策略。
+- 下一阶段：Phase 10 优先做本地项目 adapter MVP，让 `projects/<proj_id>/project.json` 的 capability guard、path safety 和 adapter metadata 真正参与文章/视频/电商等本地项目工作流；不要先扩大 MCP 写面或迁移旧 VPS run。
+- executor 后续要补 `image_edit`、`video_generation`、条件、脚本、模板级失败重试语义和更完整的失败恢复策略；继续复用 workspace core、profile `secretRef` 和 canonical artifact/ref 写回路径。
 - `workspace doctor` 下一阶段可增加 index 新鲜度/重建建议；当前只做结构、引用和占位符级检查，不解析真实 secrets 或模型供应商凭据。
 - project path guard 当前还只是 foundation API，下一阶段需要由 project adapter 或写入型业务 API 实际调用，才能形成端到端执行边界。
-- 本地项目引用现在已有 Web UI 入口，但仍只是 workspace 引用管理；下一阶段需要让真实 local executor 使用 `proj_<id>`、capability guard 和 adapter metadata 执行业务。
+- 本地项目引用现在已有 Web UI 入口，但仍只是 workspace 引用管理；下一阶段需要让 `opsc executor` 的 project adapter 使用 `proj_<id>`、capability guard 和 adapter metadata 执行业务。
 - 对真实产物写入类动作继续人工回归：替换图片旧内容不残留、自由比例/锁比例、裁剪确认、多角度生成节点保留、artifact 预览、应用副本后下游重跑。
 - 如后续要求公网 Web 直接通过 `https://96.9.225.98` 访问，需要先单独确认反向代理/域名/端口方案；本轮未修改部署配置或 `.env`。
 
@@ -121,6 +123,8 @@ Phase 8.1 Local Workspace v1 closeout 已完成：本轮只修复并验证 MCP `
 - passed：Phase 8.1 已用 Docker `golang:1.25-alpine` 执行 `/usr/local/go/bin/gofmt -w cmd/opsc/mcp.go cmd/opsc/mcp_test.go`。
 - passed：Phase 8.1 已运行 `GOPROXY=https://goproxy.cn,direct /usr/local/go/bin/go test ./cmd/opsc ./internal/localworkspace`，覆盖 MCP `opsc_workspace_info` active runtime URL/host/port 脱敏和既有 MCP/serve 回归。
 - passed：Phase 8.1 已用真实 `opsc` 二进制、临时 workspace 和 active/inactive `opsc serve` 执行 MCP 目标手工验收；证据为 `/tmp/opsc-phase8-1/evidence-F-mcp-phase8-1.json`，结果 pass。
+- passed：Phase 9 已用 Docker `golang:1.25-alpine` 执行 `gofmt -w internal/localworkspace/serve_ai_proxy.go internal/localworkspace/executor.go internal/localworkspace/executor_test.go cmd/opsc/main.go cmd/opsc/main_test.go`。
+- passed：Phase 9 已运行 `GOPROXY=https://goproxy.cn,direct go test ./internal/localworkspace ./cmd/opsc`，覆盖 executor 固定素材/text/image happy path、secretRef provider 调用、running run 恢复跳过已成功节点、CLI `opsc executor --json` 最小执行和既有 serve/MCP 回归。
 - passed：Phase 0 文档变更已运行 `git diff --check`，diff 范围只包含 Markdown/Mermaid 文档。
 - passed：中央 Wiki 已运行 `lint_wiki.sh`、`reindex_qmd.sh llm-wiki` 和 `qmd embed`。
 - passed：Phase 1 已用 Docker `golang:1.25-alpine` 执行 `gofmt -w internal/localworkspace cmd/opsc`。

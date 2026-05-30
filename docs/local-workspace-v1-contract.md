@@ -8,6 +8,7 @@
 - scope：设计 contract 定稿；不迁移旧数据，不改变现有业务 API、DB、浏览器数据或 PDD/VPS 数据流。
 - implementation status：Phase 6 已继续落地 `internal/localworkspace` 和 `cmd/opsc` 的 local workspace file-backed 底座，覆盖 workspace init/info/doctor、路径解析、manifest/envelope、ULID、`secretRef` 结构校验与脱敏 summary、atomic write、lock、doctor report、runtime metadata 读取、泛型 JSON object repository、workspace scan、template/run/artifact/profile/project/asset/prompt/canvas-project/workbench-log typed repository、run artifact ref、run node state、append-only run events、project root salted fingerprint、project path capability guard、`index.sqlite` 增量更新与扫描重建、默认 export plan 排除规则、GC dry-run plan，以及查询 CLI：`workspace index rebuild`、`workspace export plan`、`workspace gc plan`、`template list`、`run list`、`run status`、`run events`、`run events --follow`、`artifact list`、`artifact list --run`、`profile list`、`project list`、`asset list`、`prompt list`；Phase 6 现已实现 `opsc serve` 本地 loopback API、XDG state runtime metadata、HTTP bearer token、browser 一次性 launch secret + HttpOnly session、CORS loopback origin 白名单、`{code,data,msg}` HTTP JSON envelope，以及 local profiles/projects/assets/prompts 查询与写入接口。Phase 7 已先补齐对象删除、asset multipart import 和 Web UI `我的素材` / `我的提示词` adapter；“我的素材”新增/更新/删除成功后会清理当前素材和画布都不再引用的 browser media blob；随后新增 local `canvas-projects` canonical object、serve API 和 Web UI 画布库 adapter；新增 local `workbench_log` canonical object、serve API、index/doctor/GC 检查和 Web UI text/image/video 工作台生成记录 adapter，并把画布图片/视频节点及助手媒体 canonical 化到 `canvas-projects/<canvas_id>/files/`；画布保存成功后会清理已 canonical 化且当前画布状态不再引用的 browser media blob；画布导入/导出 zip 现在会携带并恢复 `workspaceFileKey` 对应文件；继续新增 `opsc serve` 本地 AI proxy 和 Web UI AI profile adapter，本地模型渠道配置写入 `profiles/`，secret 只通过 `secretRef` 解析，不再把 API key 持久化到浏览器；图片/视频工作台保存成功后会把当前结果卡片切换到 workspace workbench-log 文件端点回显，并在保存成功、新会话、移除参考图或切换历史记录时清理对应浏览器参考图临时缓存；已补齐 `opsc serve` local template CRUD，并让电商工作流模板列表/编辑页在连接本地工作区时通过 `templates/<tpl_id>/template.json` 读写私有模板，本地模板 `material_lookup` 固定素材选择读取当前 workspace 图片素材；已新增 `workspace.preferences.workflowFolders` 和 `/api/local/workspace/preferences`，工作流入口自定义文件夹不再写浏览器 `localStorage`；本轮继续补齐 `opsc serve` local run/artifact 写入 API、Web UI 本地 run 列表/状态页/artifact 预览、本地模板创建 run 草稿，以及固定 `material_lookup` 本地素材启动时复制为 canonical artifact ref；顶部本地工作区弹窗已新增 projects 面板，可通过 `/api/local/projects` 创建/编辑/删除本地项目引用，列表不显示 `rootPath`，编辑时才用 `showPaths=1` 读取路径，含 `credentialRef` 的项目不在 Web UI 写回以避免覆盖真实 secretRef。本轮新增并加固 `opsc mcp` stdio MCP 薄封装，读取/诊断/dry-run 工具调用既有 CLI JSON 命令，唯一维护写工具 `opsc_workspace_index_rebuild` 通过 active `opsc serve` loopback API 重建派生 `index.sqlite`，不直接实现新的业务读写逻辑；真实 PDD/VPS executor 接入和现有 PDD/VPS run 迁移尚未实现。
 - stabilization status：Phase 8 只做 hardening / verification / docs-sync，不新增 local executor、不迁移 PDD/VPS run、不做 Full GC、不扩大 MCP 写能力、不新增 canonical object 类型。已补充 `opsc serve` runtime/session/auth/redaction 回归、CLI `serve` 输出脱敏回归、AI proxy `secretRef` 与浏览器 header 隔离回归、本地模板草稿 run 到 canonical artifact ref 的 happy path 回归，并继续以 `go test ./cmd/opsc` 覆盖 MCP stdio wrapper smoke、对象 mutation 工具面冻结、doctor/export plan/GC dry-run/run events/index rebuild。
+- executor status：Phase 9 已新增 Local Workflow Executor MVP，唯一正式入口为 `opsc executor --workspace <path>`。executor 领取 `run.waiting_for_executor` 的 local run，执行 `input`、`text_static`、固定本地素材 `material_lookup`、`text_generation` 和 `image_generation` 最小节点集，复用 workspace profile `secretRef` 调用 OpenAI-compatible provider，并写回 canonical node state、append-only events、global artifact 和 run artifact ref；已成功节点在重启恢复时跳过，避免重复写坏 artifact。该入口不迁移 PDD/VPS run、不扩大 MCP 写面、不实现分布式 lease、Full GC、完整 project adapter、`image_edit`/`video_generation`/条件/脚本节点或完整模板重试策略。
 - default workspace：`~/OpsCanvas`
 - schema version：`local-workspace-v1`
 - canonical data：JSON、JSONL 和文件目录。
@@ -772,6 +773,7 @@ opsc artifact list --run <run_id> --json
 opsc asset list --json
 opsc prompt list --json
 opsc serve
+opsc executor
 ```
 
 通用规则：
@@ -946,10 +948,11 @@ opsc artifact list --run run_01HZZZZZZZZZZZZZZZZZZZZZZZ --workspace ./tmp/ws --j
 opsc asset list --workspace ./tmp/ws --json
 opsc prompt list --workspace ./tmp/ws --json
 opsc serve --workspace ./tmp/ws --port 0 --origin http://127.0.0.1:3000 --json
+opsc executor --workspace ./tmp/ws --json
 opsc mcp --workspace ./tmp/ws
 ```
 
-除 `run events` 外，这些命令使用同一个 success JSON envelope，默认不输出 workspace 绝对路径，也不读取或打印 secrets。`project list` 返回 `hasRootPath` 和 opaque `rootFingerprint`，不返回 `rootPath`；`profile list` 不返回 `secretRef`；`workspace export plan` 只返回相对路径和排除原因；`workspace gc plan` 只做 dry-run，返回待人工 review 的相对路径 candidates，不删除文件。`run events` 为 agent/streaming 友好的 JSONL 输出，每行一个 event envelope，不再额外包一层 success envelope；`--follow` 会先输出已有事件，再轮询追加事件直到调用方中断。`run status` 返回 run summary、node state summaries 和 `latestEventSequence`。`artifact list --run` 通过 index 查询 run refs，并返回对应 canonical `artifacts/art_<ULID>/artifact.json` 的摘要和 run 内 ref metadata。
+除 `run events` 外，这些命令使用同一个 success JSON envelope，默认不输出 workspace 绝对路径，也不读取或打印 secrets。`project list` 返回 `hasRootPath` 和 opaque `rootFingerprint`，不返回 `rootPath`；`profile list` 不返回 `secretRef`；`workspace export plan` 只返回相对路径和排除原因；`workspace gc plan` 只做 dry-run，返回待人工 review 的相对路径 candidates，不删除文件。`run events` 为 agent/streaming 友好的 JSONL 输出，每行一个 event envelope，不再额外包一层 success envelope；`--follow` 会先输出已有事件，再轮询追加事件直到调用方中断。`run status` 返回 run summary、node state summaries 和 `latestEventSequence`。`artifact list --run` 通过 index 查询 run refs，并返回对应 canonical `artifacts/art_<ULID>/artifact.json` 的摘要和 run 内 ref metadata。`opsc executor` 是 run-once 本地执行入口，可用 `--run <run_id>` 限定单个 run；workflow 失败会写入 run/node error 并在命令结果中返回该 run 状态，基础设施错误才作为 CLI 非 0 失败。
 
 ## `opsc serve` Contract
 
@@ -1122,7 +1125,7 @@ Web UI local adapter 当前约定：
 - AI 本地模式通过 `profiles/<profile_id>/profile.json` 保存可共享 channel 配置和 env `secretRef`，Web 请求模型列表、图片、图片编辑、文本问答和视频接口时调用 `/api/local/ai/v1/*` 并依赖 HttpOnly session cookie；浏览器启动时会清空旧 `infinite-canvas:ai_config_store` 内容，不再长期保存 API key；切换到无 profile 或断开的 workspace 时，Web 内存中的 local profile 配置必须清空，避免跨 workspace 串用 Base URL、模型列表或 `SecretRef`。
 - 旧浏览器 key `infinite-canvas:asset_store`、`infinite-canvas:prompt_store`、`infinite-canvas:canvas_store` 不迁移。
 - 素材文件读取默认通过带 credentials 的 fetch 转成 `blob:` object URL 后展示，避免把本地 session token 或 workspace 文件路径放进普通业务数据。
-- 当前 Web UI 已迁移素材、提示词、画布项目、画布项目内媒体文件、工作台 text/image/video 生成记录、AI 本地直连 profile/proxy、电商工作流私有模板 CRUD、模板 `material_lookup` 固定素材本地选择、工作流入口自定义文件夹、本地 run 列表/状态页/artifact 预览、本地模板创建 run 草稿和固定素材 artifact ref。真实 PDD/VPS executor、PDD/VPS run 数据迁移和运行时 `material_lookup` 自动匹配本地素材仍未完成；现有 PDD/VPS run 仍不是 local workspace canonical data。
+- 当前 Web UI 已迁移素材、提示词、画布项目、画布项目内媒体文件、工作台 text/image/video 生成记录、AI 本地直连 profile/proxy、电商工作流私有模板 CRUD、模板 `material_lookup` 固定素材本地选择、工作流入口自定义文件夹、本地 run 列表/状态页/artifact 预览、本地模板创建 run 草稿和固定素材 artifact ref。Phase 9 `opsc executor` 已能执行固定本地素材、文本生成和图片生成最小节点集；真实 PDD/VPS executor、PDD/VPS run 数据迁移、运行时 `material_lookup` 自动匹配本地素材和本地项目 adapter 仍未完成；现有 PDD/VPS run 仍不是 local workspace canonical data。
 
 ## Cloud Boundary
 
@@ -1228,7 +1231,7 @@ Web UI local adapter 当前约定：
 - CLI 二进制名：`opsc`。
 - 实现位置：优先新增 `cmd/opsc`，复用 Go 项目已有后端能力；如后续改用其它语言，必须保持本 contract 的 CLI 和文件格式不变。
 - 最小实现顺序：`workspace init` -> `workspace info --json` -> `workspace doctor` -> 本地模板列表 -> 本地 run/artifact 只读列表 -> 本地写入。
-- 当前已实现：`workspace init/info/doctor`、`workspace index rebuild`、`workspace export plan`、`workspace gc plan`、template/run/artifact/profile/project/asset/prompt/canvas-project/workbench-log file-backed repository、run node state、run artifact ref、run events JSONL/follow、project root fingerprint/path guard、index-backed list/status/artifact/private-object 查询、`opsc serve` loopback HTTP API 和 AI proxy、`opsc mcp` stdio 查询/诊断薄封装和 serve-backed index rebuild 工具，以及 Web UI `我的素材` / `我的提示词` / 画布项目库 / 工作台生成记录 / AI 本地 profile / 本地项目引用面板 / 电商工作流私有模板 / 模板固定素材本地选择 / 本地固定素材 artifact ref / 本地 run-artifact 基础 UI local adapter。
+- 当前已实现：`workspace init/info/doctor`、`workspace index rebuild`、`workspace export plan`、`workspace gc plan`、template/run/artifact/profile/project/asset/prompt/canvas-project/workbench-log file-backed repository、run node state、run artifact ref、run events JSONL/follow、project root fingerprint/path guard、index-backed list/status/artifact/private-object 查询、`opsc serve` loopback HTTP API 和 AI proxy、`opsc executor` 本地 run-once executor MVP、`opsc mcp` stdio 查询/诊断薄封装和 serve-backed index rebuild 工具，以及 Web UI `我的素材` / `我的提示词` / 画布项目库 / 工作台生成记录 / AI 本地 profile / 本地项目引用面板 / 电商工作流私有模板 / 模板固定素材本地选择 / 本地固定素材 artifact ref / 本地 run-artifact 基础 UI local adapter。
 - MCP 后续：首版已完成 CLI/core 薄封装和 index rebuild 的 `opsc serve` 调用；canonical object 写入工具、local executor 工具、canvas/workbench 工具尚未实现。
 
 ## Document Change Summary
@@ -1249,7 +1252,7 @@ Web UI local adapter 当前约定：
 - content-addressed `blobs/` 是否在后续版本加入去重；v1 暂不实现。
 - 云端 `publish/share` 的脱敏导出格式需要另开 contract，不在 v1 local-only contract 内完成。
 - `opsc serve` 已提供 SSE event stream；如未来增加 WebSocket，应保持同一 event envelope。
-- 真实 PDD/VPS executor、本地模板如何进入可执行队列、PDD/VPS run 数据迁移和运行时 `material_lookup` 自动匹配本地素材仍需下一阶段细化。
+- 真实 PDD/VPS executor、PDD/VPS run 数据迁移、运行时 `material_lookup` 自动匹配本地素材、本地项目 adapter 和 `image_edit`/`video_generation`/条件/脚本节点仍需下一阶段细化。
 
 ## Phase 0 Acceptance Checklist
 

@@ -26,7 +26,7 @@
 
 ## Consequences
 
-- 当前已建立 local workspace core、file-backed template/run/artifact/profile/project/asset/prompt/canvas-project/workbench-log repository、run events、project path guard、可重建 `index.sqlite` 查询索引、默认 export plan、GC dry-run plan、`opsc serve` 本机 loopback API 和 `opsc mcp` stdio 薄封装；profiles/projects/assets/prompts/canvas-projects/workbench-logs 已有本地查询与写入 HTTP API。后续仍需实现真实 local executor 和 canonical object 写入型 MCP 工具。
+- 当前已建立 local workspace core、file-backed template/run/artifact/profile/project/asset/prompt/canvas-project/workbench-log repository、run events、project path guard、可重建 `index.sqlite` 查询索引、默认 export plan、GC dry-run plan、`opsc serve` 本机 loopback API、`opsc mcp` stdio 薄封装和 `opsc executor` 本地 run-once executor MVP；profiles/projects/assets/prompts/canvas-projects/workbench-logs 已有本地查询与写入 HTTP API。后续仍需实现完整 project adapter、更多节点类型、完整执行恢复策略和 canonical object 写入型 MCP 工具。
 - CLI 输出、HTTP `{code,data,msg}` envelope、对象 ID、object envelope、目录结构、隐私边界、`opsc serve` runtime metadata 和 token/session 机制必须按 contract 保持稳定。
 - 云端功能需要显式 `publish`、`upload`、`share` 或 `sync --cloud`，不得隐式上传私有数据。
 - 当前 `我的素材`、`我的提示词`、画布项目库和工作台 text/image/video 生成记录已接入 local workspace；现有 Go API、DB repository、PDD/VPS run、AI 本地配置和 templates/runs/artifacts 写入 UI 仍保持原边界。
@@ -40,4 +40,4 @@
 
 ## Status
 
-Accepted. Phase 6 foundation and `opsc serve` loopback API are implemented in `internal/localworkspace` and `cmd/opsc`; profiles/projects/assets/prompts/canvas-projects/workbench-logs local write API exists. Phase 7 has integrated Web UI `我的素材`、`我的提示词`、canvas project library, text/image/video workbench histories, AI local profile/proxy, local workflow templates, workspace preferences, local run/artifact foundation and first `opsc mcp` read/diagnostic wrapper; `opsc_workspace_index_rebuild` now uses active `opsc serve` as its single-writer path. Old data migration, real local executor and canonical object write-capable MCP tools remain future work.
+Accepted. Phase 6 foundation and `opsc serve` loopback API are implemented in `internal/localworkspace` and `cmd/opsc`; profiles/projects/assets/prompts/canvas-projects/workbench-logs local write API exists. Phase 7 has integrated Web UI `我的素材`、`我的提示词`、canvas project library, text/image/video workbench histories, AI local profile/proxy, local workflow templates, workspace preferences, local run/artifact foundation and first `opsc mcp` read/diagnostic wrapper; `opsc_workspace_index_rebuild` now uses active `opsc serve` as its single-writer path. Phase 9 adds `opsc executor` as the first local run-once executor for fixed local material, text generation and image generation. Old data migration, full project adapters, additional node types and canonical object write-capable MCP tools remain future work.

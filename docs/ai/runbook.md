@@ -133,12 +133,14 @@ go run ./cmd/opsc mcp --workspace ~/OpsCanvas
 
 `opsc mcp` 是本地 agent 的 stdio MCP server。开发期可直接用 `go run ./cmd/opsc mcp --workspace ~/OpsCanvas`，实际配置 Codex / Claude Code 等 MCP client 时建议先构建 `opsc` 二进制，再把 command 指向该二进制并传 `["mcp", "--workspace", "/home/<user>/OpsCanvas"]`。首版工具只做 workspace 查询、doctor、index rebuild、export/GC dry-run、template/run/artifact/profile/project/asset/prompt 列表和 run status/events；不暴露 canonical object 写入工具、不暴露 `run events --follow`，默认不输出 secrets、workspace 绝对路径或 project `rootPath`。`opsc_workspace_info` 默认只保留 `runtime.active`，不输出 `runtime.baseUrl`、`runtime.host`、`runtime.port` 或可重建本地 serve URL 的字段。`opsc_workspace_index_rebuild` 是唯一维护写工具，调用前必须先启动同一 workspace 的 `opsc serve`；该工具只从 runtime state 读取相对 `bearer.token` 并调用 loopback `/api/local/workspace/index/rebuild`，不会把 token、token 文件路径或 serve URL 写入 MCP 输出。
 
+`opsc executor` 是当前唯一正式本地 workflow executor 入口。开发期可直接用 `go run ./cmd/opsc executor --workspace ~/OpsCanvas`，也可加 `--run <run_id>` 限定单个 run。它只处理带 `run.waiting_for_executor` 的 pending run 或已由 executor 接管的 running run；支持固定本地素材 `material_lookup`、`text_generation`、`image_generation` 和最小 `input/text_static` 辅助节点。模型调用通过 workspace profile 的 `secretRef` 解析 env/file secret，不从浏览器读取 API key，也不迁移 PDD/VPS run。
+
 Web UI 本地工作区连接：
 
 1. 启动 `go run ./cmd/opsc serve --workspace ~/OpsCanvas --port 17680 --origin <当前 Web origin>`。
 2. 在顶部导航点击本地工作区按钮，服务地址使用与 Web origin 同一 loopback host，例如 Web 是 `http://localhost:3000` 时优先填 `http://localhost:17680`，避免 `SameSite=Lax` cookie 因 `localhost` / `127.0.0.1` 混用不发送。
 3. 从 runtime/state 目录读取本次启动的 `launch.secret`，输入后建立 browser session。不要把 `bearer.token` 填到浏览器或写进 `localStorage`。
-4. `我的素材`、`我的提示词`、画布项目库、工作台 text/image/video 生成记录、电商工作流私有模板、local run/artifact 基础记录和工作流入口自定义文件夹通过 `opsc serve` 读写 workspace；图片/视频工作台结果保存成功后从 workbench-log 文件端点回显；浏览器 localforage/localStorage 只保留 `opsc:asset_store_cache:v1`、`opsc:prompt_store_cache:v1`、`opsc:canvas_store_cache:v1` 展示缓存、loopback `baseUrl` 或生成中/上传中的临时媒体状态。旧 `infinite-canvas:*`、`text_generation_logs`、`image_generation_logs`、`video_generation_logs`、`ops-canvas-workflow-folders` 测试数据不迁移。本地模板当前可创建 pending local run 草稿并 materialize 固定本地素材 artifact ref，但不启动真实 PDD/VPS executor。
+4. `我的素材`、`我的提示词`、画布项目库、工作台 text/image/video 生成记录、电商工作流私有模板、local run/artifact 基础记录和工作流入口自定义文件夹通过 `opsc serve` 读写 workspace；图片/视频工作台结果保存成功后从 workbench-log 文件端点回显；浏览器 localforage/localStorage 只保留 `opsc:asset_store_cache:v1`、`opsc:prompt_store_cache:v1`、`opsc:canvas_store_cache:v1` 展示缓存、loopback `baseUrl` 或生成中/上传中的临时媒体状态。旧 `infinite-canvas:*`、`text_generation_logs`、`image_generation_logs`、`video_generation_logs`、`ops-canvas-workflow-folders` 测试数据不迁移。本地模板当前可创建 local run，另开终端执行 `go run ./cmd/opsc executor --workspace ~/OpsCanvas` 可领取并执行固定本地素材、文本生成和图片生成最小节点集；现有 PDD/VPS run 仍不迁移。
 
 ## Test / Typecheck / Build Commands
 

@@ -1,5 +1,15 @@
 # AI 项目记忆变更记录
 
+## 2026-05-30 | Local Workflow Executor MVP | commit: pending
+
+- 目标：把 local workspace 的 pending run 草稿接入一个明确、唯一的本地执行入口，并验证 canonical node state、events、artifact/ref 写回链路。
+- 变更：新增 `internal/localworkspace` executor 和 `opsc executor` CLI。executor 领取 `run.waiting_for_executor` 的 pending run 或恢复已由 executor 接管的 running run，按模板 DAG 执行 `input`、`text_static`、固定本地素材 `material_lookup`、`text_generation`、`image_generation`，复用 local profile `secretRef` 调 OpenAI-compatible provider，并写回 run/node 状态、append-only events、global artifact 和 run artifact ref。新增单测覆盖 fixed material + text + image happy path、secretRef provider auth、running run 恢复跳过已成功节点和 CLI `opsc executor --json`。
+- 原因：Phase 7/8 已具备 local run/artifact canonical 记录和 Web UI 状态页，但 run 只能停在草稿；需要先用单机、自用、最小节点集打通真实执行闭环，再进入 project adapter。
+- 验证：已运行 Docker `golang:1.25-alpine` `gofmt -w internal/localworkspace/serve_ai_proxy.go internal/localworkspace/executor.go internal/localworkspace/executor_test.go cmd/opsc/main.go cmd/opsc/main_test.go`；已运行 `GOPROXY=https://goproxy.cn,direct go test ./internal/localworkspace ./cmd/opsc`。
+- 影响：新增本地 executor core 和 CLI 入口；复用现有 localworkspace repository、lock、profile `secretRef`、AI proxy URL/secret resolver 和 `{ ok, data, warnings }` CLI envelope；不改旧 Go main/router/service/repository/DB，不改旧云端/后台/PDD 路由语义，不扩大 MCP mutation surface。
+- 风险：当前 executor 仍是 run-once MVP，不含 daemon 调度、分布式 lease、完整 project adapter、`image_edit`、`video_generation`、条件、脚本或模板级重试配置；真实浏览器 + 真实 workspace + 真实模型账号仍需手工回归。
+- 后续：Phase 10 优先接本地项目 adapter，使 `projects/<proj_id>/project.json` 的 capability guard、path safety 和 adapter metadata 进入真实工作流；继续不要先扩大 MCP 写面或迁移旧 PDD/VPS run。
+
 ## 2026-05-30 | Local Workspace Phase 8.1 MCP workspace info redaction closeout | commit: pending
 
 - 目标：只修复 MCP `opsc_workspace_info` 默认输出泄露本地 serve URL 的问题，并把 Phase 8 手工验收收口到可关闭状态。
