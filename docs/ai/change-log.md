@@ -3,9 +3,9 @@
 ## 2026-05-31 | Phase 13 operational hardening | commit: pending
 
 - 目标：把 Phase 12 的 Hybrid Ecommerce Web + `opsc executor --watch` 黄金路径收口成可长期运行、可诊断、可安装和可回归的本机路径，同时保持 local workspace 为事实源、VPS API 只做执行后端。
-- 变更：新增 executor watch runtime metadata、`executor.watch.lock` 单 worker 约束和退出清理；`workspace doctor` 增加 index freshness、stale executor worker 和 hybrid run 等待/卡住修复建议；浏览器 smoke helper 支持非临时 profile、evidence 输出和 localStorage credential/runtime 检查；新增 `docs/opsc-installation.md`、`docs/local-workspace-regression.md` 和 Phase 13 验证报告；README/deployment/features 同步到当前仓库和当前实现。
+- 变更：新增 executor watch runtime metadata、`executor.watch.lock` 单 worker 约束和退出清理；`workspace doctor` 增加 index freshness、stale executor worker 和 hybrid run 等待/卡住修复建议；浏览器 smoke helper 支持非临时 profile、evidence 输出、localStorage credential/runtime 检查和执行前后历史对象计数/id 可访问性校验；新增 `docs/opsc-installation.md`、`docs/local-workspace-regression.md` 和 Phase 13 验证报告；README/deployment/features 同步到当前仓库和当前实现。
 - 原因：Phase 12 已证明黄金路径可跑通，但长期自用需要 worker 可观测、安装/自启动路径、真实 workspace 回归入口，以及不再停留在上游 Render/clone 文档。
-- 验证：已用 Docker `golang:1.25-alpine` 执行 `gofmt` 和 `go test ./internal/localworkspace ./cmd/opsc`；已运行 `python3 -m py_compile tools/local_workspace_browser_smoke.py tools/hybrid_ecommerce_browser_smoke.py tools/hybrid_ecommerce_vps_smoke.py`；已用隔离长期回归 workspace 和非临时浏览器 profile 跑通 local workspace UI smoke 与 hybrid Web + `opsc executor --watch` fake VPS smoke，当前机器未发现用户真实长期 workspace。
+- 验证：已用 Docker `golang:1.25-alpine` 执行 `gofmt` 和 `go test ./internal/localworkspace ./cmd/opsc`；已运行 `python3 -m py_compile tools/local_workspace_browser_smoke.py tools/hybrid_ecommerce_browser_smoke.py tools/hybrid_ecommerce_vps_smoke.py`；已用隔离长期回归 workspace 和非临时浏览器 profile 跑通 local workspace UI smoke 与 hybrid Web + `opsc executor --watch` fake VPS smoke；增强后的 helper 已复跑通过，确认执行前抽样历史对象仍可读取且 templates/runs/artifacts/profiles 计数不回退；当前机器未发现用户真实长期 workspace。
 - 影响：只加固 localworkspace executor/watch、doctor、smoke helper 和文档；不迁移旧 PDD/VPS run，不把 VPS run dir 当 canonical source，不扩大 MCP 写面，不实现 Full GC。
 - 风险：当前机器未发现用户真实长期 workspace，因此历史个人 workspace 数据仍未实测；systemd --user unit 未在目标机器上实际安装验收，仍需按 `docs/local-workspace-regression.md` 与 `docs/opsc-installation.md` 人工确认。
 - 后续：优先做真实长期 workspace 回归、worker 自启动实测、`image_edit`/`video_generation`、自动素材匹配和更完整恢复；不要先迁移旧 VPS run 或扩大 MCP 写面。

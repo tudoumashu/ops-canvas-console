@@ -14,6 +14,7 @@
 
 - `--user-data-dir <dir>`：使用非临时浏览器 profile，适合验证真实长期浏览器状态不会污染 local workspace adapter。
 - `--evidence <file>`：写入 JSON evidence，成功退出码为 `0`，失败退出码为 `1`。
+- 对已有 workspace，browser helper 会在执行前后记录 templates、runs、artifacts、profiles 的计数和少量既有 id，并在结束前重新读取这些既有 id，确认历史对象仍可访问且计数没有回退。
 
 ## 本地 workspace UI smoke
 
@@ -33,6 +34,7 @@ python3 tools/local_workspace_browser_smoke.py \
 - 真实 run 状态页读取 success；
 - artifact modal 预览；
 - `localStorage` 不包含 launch secret、bearer token 文件名或 runtime token 字段。
+- evidence 中包含 `historyBefore` / `historyAfter`，用于确认既有本地对象没有被 smoke 破坏。
 
 ## Hybrid ecommerce UI smoke
 
@@ -48,6 +50,8 @@ python3 tools/hybrid_ecommerce_browser_smoke.py \
 ```
 
 该 helper 会启动 fake VPS API，Web UI 通过真实模板编辑页发起 hybrid run，`opsc executor --watch` 负责 dispatch/sync，最后验证 run 状态页、artifact 预览和浏览器持久化脱敏。fake credential 只放在 executor 子进程环境变量中。
+
+执行前后同样会校验既有 templates、runs、artifacts、profiles 仍可访问，并把 `historyBefore` / `historyAfter` 写入 evidence。
 
 ## 真实 VPS smoke
 
@@ -76,6 +80,6 @@ python3 tools/hybrid_ecommerce_vps_smoke.py \
 2. 启动或确认 `opsc serve` 与 `opsc executor --watch` 正在运行。
 3. 使用 `--user-data-dir` 运行本地 workspace UI smoke。
 4. 使用 `--user-data-dir` 运行 hybrid ecommerce UI smoke。
-5. 检查 evidence 中 `ok=true`，浏览器 `localStorage` 未保存 secret/token/runtime 文件名，真实历史本地模板/run/artifact 列表仍可加载。
+5. 检查 evidence 中 `ok=true`，浏览器 `localStorage` 未保存 secret/token/runtime 文件名，`historyAfter` 中 templates、runs、artifacts、profiles 计数不小于 `historyBefore`，且 helper 未报告既有 id 读取失败。
 
 若 `workspace doctor` 提示 executor worker stale，重启 `opsc executor --watch`；若 hybrid run 长时间处于 pending/running，先查看 `opsc run events <run_id>`，再检查 credential/profile/channel 和 VPS API 可用性。

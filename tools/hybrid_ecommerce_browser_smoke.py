@@ -93,6 +93,24 @@ def main() -> int:
                             }
                             return payload.data;
                         };
+                        const snapshotWorkspace = async () => {
+                            const spec = [
+                                ["templates", "/api/local/templates", "templates"],
+                                ["runs", "/api/local/runs", "runs"],
+                                ["artifacts", "/api/local/artifacts", "artifacts"],
+                                ["profiles", "/api/local/profiles", "profiles"],
+                            ];
+                            const snapshot = {};
+                            for (const [name, path, key] of spec) {
+                                const data = await api(path);
+                                const items = Array.isArray(data?.[key]) ? data[key] : [];
+                                snapshot[name] = {
+                                    count: items.length,
+                                    sampleIds: items.map((item) => item.id).filter(Boolean).slice(0, 5),
+                                };
+                            }
+                            return snapshot;
+                        };
                         await fetch(`${serveUrl}/api/local/bootstrap/session`, {
                             method: "POST",
                             credentials: "include",
@@ -105,6 +123,7 @@ def main() -> int:
                             }
                         });
                         localStorage.setItem(storeKey, JSON.stringify({ state: { baseUrl: serveUrl }, version: 1 }));
+                        const historyBefore = await snapshotWorkspace();
 
                         const profile = await api("/api/local/profiles", {
                             method: "POST",
@@ -150,7 +169,7 @@ def main() -> int:
                                 },
                             }),
                         });
-                        return { templateId: template.id, profileId: profile.id };
+                        return { templateId: template.id, profileId: profile.id, historyBefore };
                     }""",
                     {"serveUrl": args.serve_url.rstrip("/"), "launchSecret": args.launch_secret, "remoteUrl": remote_url},
                 )
@@ -178,6 +197,62 @@ def main() -> int:
                 page.get_by_text("success").first.wait_for(timeout=args.success_timeout_ms)
                 page.get_by_role("button", name="预览").first.click()
                 page.locator(".ant-modal img").first.wait_for(timeout=15000)
+                history_after = page.evaluate(
+                    """async ({ serveUrl, historyBefore }) => {
+                        const api = async (path, init = {}) => {
+                            const response = await fetch(`${serveUrl}${path}`, {
+                                credentials: "include",
+                                ...init,
+                                headers: init.headers,
+                            });
+                            const payload = await response.json();
+                            if (!response.ok || payload.code !== 0) {
+                                throw new Error(payload.msg || `local api failed: ${path}`);
+                            }
+                            return payload.data;
+                        };
+                        const snapshotWorkspace = async () => {
+                            const spec = [
+                                ["templates", "/api/local/templates", "templates"],
+                                ["runs", "/api/local/runs", "runs"],
+                                ["artifacts", "/api/local/artifacts", "artifacts"],
+                                ["profiles", "/api/local/profiles", "profiles"],
+                            ];
+                            const snapshot = {};
+                            for (const [name, path, key] of spec) {
+                                const data = await api(path);
+                                const items = Array.isArray(data?.[key]) ? data[key] : [];
+                                snapshot[name] = {
+                                    count: items.length,
+                                    sampleIds: items.map((item) => item.id).filter(Boolean).slice(0, 5),
+                                };
+                            }
+                            return snapshot;
+                        };
+                        const assertHistoryPreserved = async (before, after) => {
+                            const spec = {
+                                templates: "/api/local/templates/",
+                                runs: "/api/local/runs/",
+                                artifacts: "/api/local/artifacts/",
+                                profiles: "/api/local/profiles/",
+                            };
+                            for (const [name, pathPrefix] of Object.entries(spec)) {
+                                const beforeEntry = before?.[name] || { count: 0, sampleIds: [] };
+                                const afterEntry = after?.[name] || { count: 0, sampleIds: [] };
+                                if (afterEntry.count < beforeEntry.count) {
+                                    throw new Error(`${name} count regressed from ${beforeEntry.count} to ${afterEntry.count}`);
+                                }
+                                for (const id of beforeEntry.sampleIds || []) {
+                                    await api(`${pathPrefix}${encodeURIComponent(id)}`);
+                                }
+                            }
+                        };
+                        const historyAfter = await snapshotWorkspace();
+                        await assertHistoryPreserved(historyBefore, historyAfter);
+                        return historyAfter;
+                    }""",
+                    {"serveUrl": args.serve_url.rstrip("/"), "historyBefore": setup["historyBefore"]},
+                )
                 storage = page.evaluate("() => JSON.stringify(window.localStorage)")
                 for forbidden in [
                     SECRET_VALUE,
@@ -196,6 +271,7 @@ def main() -> int:
                     **setup,
                     "runId": run_id,
                     "overviewCalls": state.overview_calls,
+                    "historyAfter": history_after,
                     "persistentProfile": bool(args.user_data_dir),
                 }
                 write_evidence(args.evidence, payload)

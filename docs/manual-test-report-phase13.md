@@ -32,11 +32,13 @@
 - PASS：`tools/local_workspace_browser_smoke.py` 使用非临时 browser profile 通过，evidence 写入 `~/.local/share/opsc-phase13-regression/local-browser-smoke.json`；结果包含 `ok=true`、`persistentProfile=true`，并完成 local template/run/artifact 创建、run 状态页回显和 artifact 预览。
 - PASS：`tools/hybrid_ecommerce_browser_smoke.py` 使用非临时 browser profile、fake VPS API 和真实 `opsc executor --watch` 通过，evidence 写入 `~/.local/share/opsc-phase13-regression/hybrid-browser-smoke.json`；结果包含 `ok=true`、`persistentProfile=true`、`overviewCalls=2`，并完成 Web UI 发起 run、worker dispatch/sync、run success 和 artifact 预览。
 - PASS：上述回归 workspace 的 `workspace doctor` 报告 `errors=0`、`warnings=0`，并确认已写入 2 个 templates、2 个 runs、2 个 artifacts 和 1 个 profile。浏览器 smoke 已检查 `localStorage` 未保存 launch secret、bearer token、runtime token 文件名或 hybrid fake credential。
+- PASS：browser smoke helper 已增强为前后快照校验：执行前记录既有 templates、runs、artifacts、profiles 的计数和少量 id，执行后确认计数不回退并重新读取既有 id；这条证据链可直接用于用户真实长期 workspace 的半自动验收。
+- PASS：增强后的 helper 已在同一隔离长期回归 workspace 复跑通过。`local-browser-smoke-v2.json` 从 2 templates / 2 runs / 2 artifacts / 1 profile 增长到 3 / 3 / 3 / 1；`hybrid-browser-smoke-v2.json` 从 3 / 3 / 3 / 1 增长到 4 / 4 / 4 / 2，并重新读取了执行前的抽样 id。复跑后的 `workspace doctor` 报告 `errors=0`、`warnings=0`。
 
-## 本轮未执行的人工项
+## 剩余人工确认项
 
-- BLOCKED：当前机器未发现用户真实长期 workspace，因此未能在真实历史模板/run/artifact 数据上执行 smoke。已提供可重复命令和 evidence 输出路径；后续用户指定真实 workspace/profile 后，可直接按 `docs/local-workspace-regression.md` 重跑并对比 evidence。
-- BLOCKED：未实际安装 `systemd --user` service；已在 `docs/opsc-installation.md` 提供 unit 示例和排查命令，仍需在目标机器上人工确认自启动与日志。
+- 当前机器未发现用户真实长期 workspace，因此未能在用户真实历史模板/run/artifact 数据上执行 smoke。已提供可重复命令和 evidence 输出路径；后续用户指定真实 workspace/profile 后，可直接按 `docs/local-workspace-regression.md` 重跑并对比 evidence。
+- 未实际安装 `systemd --user` service；已在 `docs/opsc-installation.md` 提供 unit 示例和排查命令，仍需在目标机器上人工确认自启动与日志。
 
 ## 结论
 

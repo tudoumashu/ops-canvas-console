@@ -69,6 +69,24 @@ def main() -> int:
                             }
                             return payload.data;
                         };
+                        const snapshotWorkspace = async () => {
+                            const spec = [
+                                ["templates", "/api/local/templates", "templates"],
+                                ["runs", "/api/local/runs", "runs"],
+                                ["artifacts", "/api/local/artifacts", "artifacts"],
+                                ["profiles", "/api/local/profiles", "profiles"],
+                            ];
+                            const snapshot = {};
+                            for (const [name, path, key] of spec) {
+                                const data = await api(path);
+                                const items = Array.isArray(data?.[key]) ? data[key] : [];
+                                snapshot[name] = {
+                                    count: items.length,
+                                    sampleIds: items.map((item) => item.id).filter(Boolean).slice(0, 5),
+                                };
+                            }
+                            return snapshot;
+                        };
                         await fetch(`${serveUrl}/api/local/bootstrap/session`, {
                             method: "POST",
                             credentials: "include",
@@ -81,6 +99,7 @@ def main() -> int:
                             }
                         });
                         localStorage.setItem(storeKey, JSON.stringify({ state: { baseUrl: serveUrl }, version: 1 }));
+                        const historyBefore = await snapshotWorkspace();
 
                         const template = await api("/api/local/templates", {
                             method: "POST",
@@ -135,7 +154,7 @@ def main() -> int:
                                 },
                             }),
                         });
-                        return { runId: run.id, templateId: template.id };
+                        return { runId: run.id, templateId: template.id, historyBefore };
                     }""",
                     {"serveUrl": args.serve_url.rstrip("/"), "launchSecret": args.launch_secret, "pngBase64": PNG_1X1_BASE64},
                 )
@@ -144,8 +163,8 @@ def main() -> int:
                 page.get_by_text(result["runId"]).wait_for(timeout=15000)
                 page.get_by_text("pending").first.wait_for(timeout=15000)
 
-                page.evaluate(
-                    """async ({ serveUrl, runId, templateId, pngBase64 }) => {
+                artifact_result = page.evaluate(
+                    """async ({ serveUrl, runId, templateId, pngBase64, historyBefore }) => {
                         const api = async (path, init = {}) => {
                             const response = await fetch(`${serveUrl}${path}`, {
                                 credentials: "include",
@@ -157,6 +176,42 @@ def main() -> int:
                                 throw new Error(payload.msg || `local api failed: ${path}`);
                             }
                             return payload.data;
+                        };
+                        const snapshotWorkspace = async () => {
+                            const spec = [
+                                ["templates", "/api/local/templates", "templates", "/api/local/templates/"],
+                                ["runs", "/api/local/runs", "runs", "/api/local/runs/"],
+                                ["artifacts", "/api/local/artifacts", "artifacts", "/api/local/artifacts/"],
+                                ["profiles", "/api/local/profiles", "profiles", "/api/local/profiles/"],
+                            ];
+                            const snapshot = {};
+                            for (const [name, path, key] of spec) {
+                                const data = await api(path);
+                                const items = Array.isArray(data?.[key]) ? data[key] : [];
+                                snapshot[name] = {
+                                    count: items.length,
+                                    sampleIds: items.map((item) => item.id).filter(Boolean).slice(0, 5),
+                                };
+                            }
+                            return snapshot;
+                        };
+                        const assertHistoryPreserved = async (before, after) => {
+                            const spec = {
+                                templates: "/api/local/templates/",
+                                runs: "/api/local/runs/",
+                                artifacts: "/api/local/artifacts/",
+                                profiles: "/api/local/profiles/",
+                            };
+                            for (const [name, pathPrefix] of Object.entries(spec)) {
+                                const beforeEntry = before?.[name] || { count: 0, sampleIds: [] };
+                                const afterEntry = after?.[name] || { count: 0, sampleIds: [] };
+                                if (afterEntry.count < beforeEntry.count) {
+                                    throw new Error(`${name} count regressed from ${beforeEntry.count} to ${afterEntry.count}`);
+                                }
+                                for (const id of beforeEntry.sampleIds || []) {
+                                    await api(`${pathPrefix}${encodeURIComponent(id)}`);
+                                }
+                            }
                         };
                         const bytes = Uint8Array.from(atob(pngBase64), (char) => char.charCodeAt(0));
                         const file = new Blob([bytes], { type: "image/png" });
@@ -225,9 +280,17 @@ def main() -> int:
                                 },
                             }),
                         });
-                        return artifact.id;
+                        const historyAfter = await snapshotWorkspace();
+                        await assertHistoryPreserved(historyBefore, historyAfter);
+                        return { artifactId: artifact.id, historyAfter };
                     }""",
-                    {"serveUrl": args.serve_url.rstrip("/"), "runId": result["runId"], "templateId": result["templateId"], "pngBase64": PNG_1X1_BASE64},
+                    {
+                        "serveUrl": args.serve_url.rstrip("/"),
+                        "runId": result["runId"],
+                        "templateId": result["templateId"],
+                        "pngBase64": PNG_1X1_BASE64,
+                        "historyBefore": result["historyBefore"],
+                    },
                 )
 
                 page.get_by_text("success").first.wait_for(timeout=20000)
@@ -237,7 +300,7 @@ def main() -> int:
                 for forbidden in [args.launch_secret, "Bearer ", "bearer.token", "launch.secret", "tokenFile", "launchSecretFile"]:
                     if forbidden and forbidden in storage:
                         raise RuntimeError("browser localStorage contains local runtime or credential material")
-                payload = {"ok": True, **result, "persistentProfile": bool(args.user_data_dir)}
+                payload = {"ok": True, **result, **artifact_result, "persistentProfile": bool(args.user_data_dir)}
                 write_evidence(args.evidence, payload)
                 print(json.dumps(payload, ensure_ascii=False))
             finally:
