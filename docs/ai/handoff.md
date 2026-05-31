@@ -2,7 +2,7 @@
 
 ## Current Objective
 
-Phase 11 hybrid ecommerce backend MVP 已接到 `opsc executor`：local workspace 仍是 canonical source；已确认的远端 PDD 电商模板可通过 `opsc ecommerce import-template` 重建为本地 template，并通过 `opsc ecommerce create-run` 创建 pending local run、template snapshot、pending node state 和 `run.waiting_for_executor` event；executor 使用 profile/channel `secretRef` 调 VPS PDD API 创建远端 run、同步状态和关键 artifact，再写回本地 run/node state/events/artifact ref。现有 PDD/VPS run 历史不迁移，VPS run dir 不作为事实源，浏览器不保存或发送 VPS admin credential，MCP 写面不扩大。
+Phase 12 hybrid ecommerce Web + worker 黄金路径已接到 `opsc executor --watch`：local workspace 仍是 canonical source；已确认的远端 PDD 电商模板可通过 `opsc ecommerce import-template` 重建为本地 template，并通过 CLI 或 Web UI 创建 pending local run、template snapshot、pending node state 和 `run.waiting_for_executor` event；executor 使用 profile/channel `secretRef` 调 VPS PDD API 创建远端 run、同步状态、阶段进度和关键 artifact，再写回本地 run/node state/events/artifact ref。现有 PDD/VPS run 历史不迁移，VPS run dir 不作为事实源，浏览器不保存或发送 VPS admin credential，MCP 写面不扩大。
 
 ## Completed Work
 
@@ -14,6 +14,9 @@ Phase 11 hybrid ecommerce backend MVP 已接到 `opsc executor`：local workspac
 - Phase 10 Web UI 本地模板启动参数允许透传 `profileId/projectId` 到 local run；新增 `tools/local_workspace_browser_smoke.py`，用于已有 `opsc serve` 和 Next dev server 下复测 browser bootstrap session、本地模板/run 状态页和 artifact 预览。
 - Phase 11 新增 `internal/localworkspace/hybrid_ecommerce.go`、`opsc ecommerce import-template` 和 `opsc ecommerce create-run`：通过 profile/channel `secretRef` 读取 VPS PDD template，写入本地 hybrid template metadata；CLI 可基于已导入 hybrid template 创建 pending local run、template snapshot、pending node state 和 `run.waiting_for_executor` event，且不调用 VPS API；executor 遇到 `hybridEcommerce.backend=vps_pdd` 会创建远端 run、轮询 overview/product-detail、下载 image/video/key artifact 并写回 local canonical artifact/ref/events/node state；远端 `runDir`、输入文件路径和 token 不写入 workspace 或默认 CLI 输出。
 - Phase 11 新增 `tools/hybrid_ecommerce_vps_smoke.py` 和 `docs/manual-test-report-phase11.md`：helper 只编排现有 `opsc` 命令，覆盖 import-template、create-run、executor、run status 和 artifact list，不直接读写 workspace 文件、不直接调用 VPS API、不打印 secret；helper 支持显式 env `secretRef` 或已有 workspace profile/channel 两种凭据路径，且不再默认传不存在的 `default/vps` profile/channel。真实 VPS `96.9.225.98` smoke 已通过，导入已确认模板、dispatch 远端 run、同步到 local run `success` 并写回 5 个 canonical artifact/ref。
+- Phase 12 新增 `opsc executor --watch` 和 `--poll-interval`：watch 模式短持 workspace lock 处理 pending/running run，hybrid 非终态远端同步会写入阶段进度 node output/metadata 并释放锁等待下一轮；CLI JSON watch 模式按有处理结果的迭代输出 JSON line。
+- Phase 12 Web local hybrid run 路径收口：`local-workflow-templates.ts` 在 Web 启动 local hybrid run 时保留 template hybrid metadata，正式路径要求 profile/channel `secretRef`，生成 run metadata 后仍只通过 `opsc serve` 写 workspace；local run 状态页新增阶段进度列，浏览器不直接调用 VPS API。
+- Phase 12 新增 `tools/hybrid_ecommerce_browser_smoke.py` 和 `docs/manual-test-report-phase12.md`：helper 使用 fake VPS API、真实浏览器、`opsc serve` 和 `opsc executor --watch` 验证 Web 创建 hybrid run、状态页轮询、artifact 预览和 localStorage credential 脱敏；当前真实长期 workspace + 真实 VPS Web 低成本 smoke 仍保留在 `docs/pending-test.md`。
 - Phase 8 新增稳定化验证：`opsc serve` state/session/auth/redaction、CLI `serve` 输出脱敏、AI proxy `secretRef` 与浏览器 header 隔离、MCP stdio 工具面冻结和诊断/plan/index rebuild smoke、本地模板草稿 run -> canonical artifact -> run artifact ref happy path；同步 README、features、contract、pending-test、todo、CHANGELOG、项目记忆和中央 Wiki。
 - 已和用户拍板 local-first 数据分离基线：私有模板、run、artifact、个人素材、个人 prompt、本地项目路径和本地日志默认本地；云端只保留账号/授权/计费、公共模板、公共素材和商用 profile 能力。
 - 已确认默认 workspace 为 `~/OpsCanvas`，支持多 workspace；项目文件只保存外部路径引用，不复制进 workspace；生成 artifact 复制进 workspace；secrets 不写普通 JSON；`opsc serve` 使用本地随机 bearer token 或 browser session。
@@ -90,7 +93,7 @@ Phase 11 hybrid ecommerce backend MVP 已接到 `opsc executor`：local workspac
 
 ## In Progress
 
-- executor 仍是 MVP：只覆盖固定本地素材、文本生成、图片生成、条件分支、受 project guard 约束的脚本节点，以及单条已确认电商模板的 hybrid VPS PDD backend；真实 VPS smoke 已证明导入/dispatch/sync/artifact ref 黄金路径可行。`image_edit`、`video_generation`、复杂 loop/guardrail、完整模板重试策略、自动素材匹配、专用文章/视频/电商 project adapter、远端细粒度事件同步、watch/worker 产品化和真实 PDD/VPS run 历史迁移仍待后续阶段。
+- executor 仍是 MVP：只覆盖固定本地素材、文本生成、图片生成、条件分支、受 project guard 约束的脚本节点，以及单条已确认电商模板的 hybrid VPS PDD backend；真实 VPS smoke 已证明导入/dispatch/sync/artifact ref 黄金路径可行，Phase 12 已补 `opsc executor --watch` 和 Web local hybrid run 路径。`image_edit`、`video_generation`、复杂 loop/guardrail、完整模板重试策略、自动素材匹配、专用文章/视频/电商 project adapter、真实 worker 安装/自启动和真实 PDD/VPS run 历史迁移仍待后续阶段。
 
 ## Blockers
 
@@ -113,7 +116,7 @@ Phase 11 hybrid ecommerce backend MVP 已接到 `opsc executor`：local workspac
 
 ## Next Recommended Steps
 
-- 下一阶段：优先把 Phase 11 黄金路径产品化为常驻本地 worker/watch mode，并补 Web UI 一条 local workspace hybrid template -> local run -> executor -> artifact 预览的浏览器回归，以及远端事件更细粒度增量同步；不要先扩大 MCP 写面或迁移旧 VPS run 历史。
+- 下一阶段：优先补 `opsc executor --watch` 的安装/自启动文档、真实长期 workspace 的 Web hybrid run 低成本回归、`image_edit`/`video_generation` 和更完整 retry/recovery；不要先扩大 MCP 写面或迁移旧 VPS run 历史。
 - executor 后续要补 `image_edit`、`video_generation`、复杂 loop/guardrail、模板级失败重试语义和更完整的失败恢复策略；继续复用 workspace core、profile `secretRef` 和 canonical artifact/ref 写回路径。
 - `workspace doctor` 下一阶段可增加 index 新鲜度/重建建议；当前只做结构、引用和占位符级检查，不解析真实 secrets 或模型供应商凭据。
 - project path guard 已进入 executor `condition`/`script`/output mapping 最小链路；下一阶段需要专用 adapter 把文章/视频/电商的真实业务目录和脚本约定固化下来。
@@ -143,6 +146,9 @@ Phase 11 hybrid ecommerce backend MVP 已接到 `opsc executor`：local workspac
 - passed：Phase 11 smoke helper 已运行 `python -m py_compile tools/hybrid_ecommerce_vps_smoke.py`；缺失 credential source 的最小复现返回 exit 2，并生成 redacted evidence，确认不会打印 workspace 绝对路径或 secret。
 - passed：Phase 11 smoke helper 已用临时 fake `opsc` 复测完整命令编排，确认未配置 profile/channel 时不会默认传 `default/vps`，会走 `OPSC_HYBRID_VPS_TOKEN` env `secretRef` 路径，并能从 `artifact list --run` 的 `{ artifacts: [...] }` envelope 统计 artifact。
 - passed VPS smoke：目标 VPS `96.9.225.98` 通过 SSH `-p 443` 建立 tunnel 到 VPS 本机 API；`tools/hybrid_ecommerce_vps_smoke.py` 使用已确认模板 `workflow-template-381c428b-fc1c-43b4-9b2f-7ce885e3e29e` 和 env `secretRef` 跑通 `import-template -> create-run -> executor --run -> run status -> artifact list`。结果为本地 run `run_01KSWZBMRTMT9V5H8MB9BEBK2C` `success`，8 个节点 success，`artifactCount=5`，证据见 `docs/manual-test-report-phase11.md`。
+- passed：Phase 12 已用 Docker `golang:1.25-alpine` 执行 `gofmt -w cmd/opsc/main.go cmd/opsc/main_test.go internal/localworkspace/executor.go internal/localworkspace/executor_test.go internal/localworkspace/hybrid_ecommerce.go internal/localworkspace/index.go internal/localworkspace/workflow_objects.go`。
+- passed：Phase 12 已运行 Docker `go test ./internal/localworkspace ./cmd/opsc`，覆盖 `opsc executor --watch`、hybrid 远端非终态重复同步、阶段进度 node output/metadata、artifact/ref 写回、resume event 去重和 CLI watch JSON stream。
+- passed：Phase 12 已运行 `cd web && npx tsc --noEmit` 和 `python3 -m py_compile tools/hybrid_ecommerce_browser_smoke.py tools/local_workspace_browser_smoke.py tools/hybrid_ecommerce_vps_smoke.py`；fake browser smoke helper 已新增但本轮未启动真实浏览器环境执行。
 - passed：Phase 0 文档变更已运行 `git diff --check`，diff 范围只包含 Markdown/Mermaid 文档。
 - passed：中央 Wiki 已运行 `lint_wiki.sh`、`reindex_qmd.sh llm-wiki` 和 `qmd embed`。
 - passed：Phase 1 已用 Docker `golang:1.25-alpine` 执行 `gofmt -w internal/localworkspace cmd/opsc`。

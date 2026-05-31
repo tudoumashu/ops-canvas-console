@@ -70,6 +70,7 @@ export default function LocalRunClientPage({ runId }: { runId: string }) {
         () => [
             { title: "节点", dataIndex: "nodeId", render: (value: string) => <span className="font-mono text-xs">{value}</span> },
             { title: "状态", dataIndex: "status", width: 120, render: (value: string) => <StatusTag status={value} /> },
+            { title: "进度", width: 220, render: (_, item) => <span className="text-xs text-stone-500">{nodeProgressText(item)}</span> },
             { title: "错误", dataIndex: "error", ellipsis: true, render: (value?: string) => <span className="text-xs text-red-500">{value || "-"}</span> },
             { title: "更新时间", dataIndex: "updatedAt", width: 220, render: (value: string) => <span className="font-mono text-xs">{value || "-"}</span> },
         ],
@@ -192,6 +193,26 @@ export default function LocalRunClientPage({ runId }: { runId: string }) {
 
 function shouldPollLocalRun(status?: string) {
     return status === "pending" || status === "running";
+}
+
+function nodeProgressText(node: LocalRunNodeStateSummary) {
+    const output = node.output || {};
+    const total = numberValue(output.total);
+    if (total <= 0) return "-";
+    const success = numberValue(output.success);
+    const running = numberValue(output.running);
+    const failed = numberValue(output.failed);
+    const skipped = numberValue(output.skipped);
+    const parts = [`${success}/${total} 成功`];
+    if (running > 0) parts.push(`${running} 运行中`);
+    if (failed > 0) parts.push(`${failed} 失败`);
+    if (skipped > 0) parts.push(`${skipped} 跳过`);
+    return parts.join(" · ");
+}
+
+function numberValue(value: unknown) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function StatusTag({ status }: { status: string }) {

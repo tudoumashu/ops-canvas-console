@@ -48,12 +48,16 @@ export async function deleteLocalPDDWorkflowTemplate(baseUrl: string, id: string
 }
 
 export async function startLocalPDDWorkflowTemplateRun(baseUrl: string, templateId: string, payload: StartWorkflowTemplateRunRequest): Promise<StartWorkflowTemplateRunResult> {
-    const template = await fetchLocalPDDWorkflowTemplate(baseUrl, templateId);
+    const localTemplate = await getLocalTemplate(baseUrl, templateId);
+    const template = workflowTemplateFromLocalDocument(localTemplate);
     const settings = template.spec.settings as WorkflowTemplateSpec["settings"] & { defaultProfileId?: string; defaultProjectId?: string; profileId?: string; projectId?: string };
+    const hybridMetadata = hybridRunMetadataFromLocalTemplate(localTemplate.data, payload, settings);
+    const profileId = payload.profileId || settings.defaultProfileId || settings.profileId || hybridMetadata?.profileId;
+    const channelId = hybridMetadata?.channelId;
     const run = await createLocalRun(baseUrl, {
         templateId,
         status: "pending",
-        profileId: payload.profileId || settings.defaultProfileId || settings.profileId,
+        profileId,
         projectId: payload.projectId || settings.defaultProjectId || settings.projectId,
         input: {
             inputs: payload.inputs || [],
@@ -65,7 +69,8 @@ export async function startLocalPDDWorkflowTemplateRun(baseUrl: string, template
             workflowType: template.workflowType || "pdd",
             templateTitle: template.title,
             templateRevision: template.revision,
-            executor: "not_connected",
+            executor: "opsc",
+            ...(hybridMetadata ? { hybridEcommerce: { ...hybridMetadata, profileId, channelId } } : {}),
         },
     });
     const nodeResults = await Promise.all(template.spec.nodes.map((node, index) => initializeLocalRunNode(baseUrl, run.id, template, node, index)));
@@ -258,6 +263,21 @@ function preserveLocalTemplateHybridMetadata(next: LocalTemplateData, current: L
     }
 }
 
+function hybridRunMetadataFromLocalTemplate(data: LocalTemplateData, payload: StartWorkflowTemplateRunRequest, settings: Record<string, unknown>) {
+    const hybrid = asRecord(data.metadata?.hybridEcommerce) || asRecord(data.settings?.hybridEcommerce);
+    if (!hybrid) return undefined;
+    const remoteTemplateId = stringValue(hybrid.remoteTemplateId);
+    if (!remoteTemplateId) throw new Error("Hybrid ecommerce 模板缺少 remoteTemplateId");
+    const profileId = payload.profileId || stringValue(settings.defaultProfileId) || stringValue(settings.profileId) || stringValue(hybrid.profileId);
+    if (!profileId) throw new Error("Hybrid ecommerce Web run 需要使用 profile/channel secretRef 导入模板后再启动。");
+    return {
+        backend: stringValue(hybrid.backend) || "vps_pdd",
+        remoteTemplateId,
+        profileId,
+        channelId: stringValue(hybrid.channelId),
+    };
+}
+
 function localSpecFromData(data: LocalTemplateData): WorkflowTemplateSpec {
     const settings = data.settings || {};
     return {
@@ -265,6 +285,7 @@ function localSpecFromData(data: LocalTemplateData): WorkflowTemplateSpec {
         nodes: (data.nodes || []) as unknown as WorkflowTemplateNode[],
         edges: (data.edges || []) as unknown as WorkflowTemplateEdge[],
         settings: {
+            ...settings,
             productConcurrency: positiveInt(settings.productConcurrency, 2),
             maxRetries: nonNegativeInt(settings.maxRetries, 0),
         },
@@ -283,4 +304,12 @@ function positiveInt(value: unknown, fallback: number) {
 function nonNegativeInt(value: unknown, fallback: number) {
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+    return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function stringValue(value: unknown) {
+    return typeof value === "string" ? value.trim() : "";
 }

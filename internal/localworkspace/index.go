@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -181,15 +182,17 @@ type IndexRunArtifactRefRecord struct {
 func (IndexRunArtifactRefRecord) TableName() string { return "index_run_artifact_refs" }
 
 type IndexRunNodeStateRecord struct {
-	RunID      string `gorm:"primaryKey;column:run_id"`
-	NodeID     string `gorm:"primaryKey;column:node_id"`
-	FileName   string `gorm:"column:file_name"`
-	Status     string `gorm:"column:status;index"`
-	StartedAt  string `gorm:"column:started_at"`
-	FinishedAt string `gorm:"column:finished_at"`
-	Error      string `gorm:"column:error"`
-	Revision   int    `gorm:"column:revision"`
-	UpdatedAt  string `gorm:"column:updated_at;index"`
+	RunID        string `gorm:"primaryKey;column:run_id"`
+	NodeID       string `gorm:"primaryKey;column:node_id"`
+	FileName     string `gorm:"column:file_name"`
+	Status       string `gorm:"column:status;index"`
+	StartedAt    string `gorm:"column:started_at"`
+	FinishedAt   string `gorm:"column:finished_at"`
+	Error        string `gorm:"column:error"`
+	OutputJSON   string `gorm:"column:output_json"`
+	MetadataJSON string `gorm:"column:metadata_json"`
+	Revision     int    `gorm:"column:revision"`
+	UpdatedAt    string `gorm:"column:updated_at;index"`
 }
 
 func (IndexRunNodeStateRecord) TableName() string { return "index_run_node_states" }
@@ -494,15 +497,17 @@ func (i *WorkspaceIndex) UpsertRunArtifactRef(runID string, document Envelope[Ru
 
 func (i *WorkspaceIndex) UpsertRunNodeState(runID string, fileName string, document Envelope[RunNodeStateData]) error {
 	record := IndexRunNodeStateRecord{
-		RunID:      runID,
-		NodeID:     document.Data.NodeID,
-		FileName:   fileName,
-		Status:     document.Data.Status,
-		StartedAt:  document.Data.StartedAt,
-		FinishedAt: document.Data.FinishedAt,
-		Error:      document.Data.Error,
-		Revision:   document.Revision,
-		UpdatedAt:  document.UpdatedAt,
+		RunID:        runID,
+		NodeID:       document.Data.NodeID,
+		FileName:     fileName,
+		Status:       document.Data.Status,
+		StartedAt:    document.Data.StartedAt,
+		FinishedAt:   document.Data.FinishedAt,
+		Error:        document.Data.Error,
+		OutputJSON:   encodeMap(document.Data.Output),
+		MetadataJSON: encodeMap(document.Data.Metadata),
+		Revision:     document.Revision,
+		UpdatedAt:    document.UpdatedAt,
 	}
 	return i.upsert(&record)
 }
@@ -776,6 +781,8 @@ func (i *WorkspaceIndex) ListRunNodeStateSummaries(runID string) ([]RunNodeState
 			StartedAt:  record.StartedAt,
 			FinishedAt: record.FinishedAt,
 			Error:      record.Error,
+			Output:     decodeMap(record.OutputJSON),
+			Metadata:   decodeMap(record.MetadataJSON),
 			Revision:   record.Revision,
 			UpdatedAt:  record.UpdatedAt,
 		})
@@ -1092,6 +1099,31 @@ func decodeStringList(value string) []string {
 	var values []string
 	if err := json.Unmarshal([]byte(value), &values); err != nil {
 		return []string{}
+	}
+	return values
+}
+
+func encodeMap(values map[string]any) string {
+	if len(values) == 0 {
+		return "{}"
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
+func decodeMap(value string) map[string]any {
+	if strings.TrimSpace(value) == "" || value == "{}" {
+		return nil
+	}
+	var values map[string]any
+	if err := json.Unmarshal([]byte(value), &values); err != nil {
+		return nil
+	}
+	if len(values) == 0 {
+		return nil
 	}
 	return values
 }

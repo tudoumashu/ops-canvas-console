@@ -121,13 +121,15 @@ type RunArtifactSummary struct {
 }
 
 type RunNodeStateSummary struct {
-	NodeID     string `json:"nodeId"`
-	Status     string `json:"status"`
-	StartedAt  string `json:"startedAt,omitempty"`
-	FinishedAt string `json:"finishedAt,omitempty"`
-	Error      string `json:"error,omitempty"`
-	Revision   int    `json:"revision"`
-	UpdatedAt  string `json:"updatedAt"`
+	NodeID     string         `json:"nodeId"`
+	Status     string         `json:"status"`
+	StartedAt  string         `json:"startedAt,omitempty"`
+	FinishedAt string         `json:"finishedAt,omitempty"`
+	Error      string         `json:"error,omitempty"`
+	Output     map[string]any `json:"output,omitempty"`
+	Metadata   map[string]any `json:"metadata,omitempty"`
+	Revision   int            `json:"revision"`
+	UpdatedAt  string         `json:"updatedAt"`
 }
 
 type RunStatusSnapshot struct {

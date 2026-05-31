@@ -137,7 +137,7 @@ go run ./cmd/opsc mcp --workspace ~/OpsCanvas
 
 `opsc mcp` 是本地 agent 的 stdio MCP server。开发期可直接用 `go run ./cmd/opsc mcp --workspace ~/OpsCanvas`，实际配置 Codex / Claude Code 等 MCP client 时建议先构建 `opsc` 二进制，再把 command 指向该二进制并传 `["mcp", "--workspace", "/home/<user>/OpsCanvas"]`。首版工具只做 workspace 查询、doctor、index rebuild、export/GC dry-run、template/run/artifact/profile/project/asset/prompt 列表和 run status/events；不暴露 canonical object 写入工具、不暴露 `run events --follow`，默认不输出 secrets、workspace 绝对路径或 project `rootPath`。`opsc_workspace_info` 默认只保留 `runtime.active`，不输出 `runtime.baseUrl`、`runtime.host`、`runtime.port` 或可重建本地 serve URL 的字段。`opsc_workspace_index_rebuild` 是唯一维护写工具，调用前必须先启动同一 workspace 的 `opsc serve`；该工具只从 runtime state 读取相对 `bearer.token` 并调用 loopback `/api/local/workspace/index/rebuild`，不会把 token、token 文件路径或 serve URL 写入 MCP 输出。
 
-`opsc executor` 是当前唯一正式本地 workflow executor 入口。开发期可直接用 `go run ./cmd/opsc executor --workspace ~/OpsCanvas`，也可加 `--run <run_id>` 限定单个 run。它只处理带 `run.waiting_for_executor` 的 pending run 或已由 executor 接管的 running run；支持固定本地素材 `material_lookup`、`text_generation`、`image_generation`、最小 `input/text_static` 辅助节点，以及单条已确认电商模板的 hybrid VPS backend。模型调用通过 workspace profile 的 `secretRef` 解析 env/file secret，不从浏览器读取 API key，也不迁移 PDD/VPS run。
+`opsc executor` 是当前唯一正式本地 workflow executor 入口。开发期可直接用 `go run ./cmd/opsc executor --workspace ~/OpsCanvas` 跑一次，也可加 `--run <run_id>` 限定单个 run；Web UI 本地 run 需要常驻 worker 时使用 `go run ./cmd/opsc executor --workspace ~/OpsCanvas --watch --poll-interval 5s`。它只处理带 `run.waiting_for_executor` 的 pending run 或已由 executor 接管的 running run；支持固定本地素材 `material_lookup`、`text_generation`、`image_generation`、最小 `input/text_static` 辅助节点、project-aware `condition`/`script`，以及单条已确认电商模板的 hybrid VPS backend。模型调用和 hybrid Web/watch credential 都通过 workspace profile 的 `secretRef` 解析 env/file secret，不从浏览器读取 API key 或 VPS token，也不迁移 PDD/VPS run。
 
 Hybrid ecommerce VPS smoke。当前已确认 VPS `96.9.225.98` 的应用 API 在 VPS 本机 `127.0.0.1:18080`，从本机测试时先建立 SSH tunnel：
 
@@ -175,12 +175,24 @@ tools/hybrid_ecommerce_vps_smoke.py \
 
 helper 不再默认传 `default/vps` profile/channel；没有显式 profile/channel 时，凭据来自 `--secret-env` 或 `OPSC_HYBRID_SECRET_ENV` 指向的 env var。
 
+Hybrid ecommerce browser smoke 可在已启动 Next dev server 和 `opsc serve` 后执行：
+
+```bash
+tools/hybrid_ecommerce_browser_smoke.py \
+  --workspace ~/OpsCanvas \
+  --web-url http://127.0.0.1:3000 \
+  --serve-url http://127.0.0.1:17680 \
+  --launch-secret <launch_secret>
+```
+
+该 helper 使用 fake VPS API，走真实浏览器、`opsc serve` 和 `opsc executor --watch`，用于验证 Web 创建 hybrid run、状态页轮询、artifact 预览和浏览器持久化不含 credential material；它不会调用真实 VPS 或真实模型账号。
+
 Web UI 本地工作区连接：
 
 1. 启动 `go run ./cmd/opsc serve --workspace ~/OpsCanvas --port 17680 --origin <当前 Web origin>`。
 2. 在顶部导航点击本地工作区按钮，服务地址使用与 Web origin 同一 loopback host，例如 Web 是 `http://localhost:3000` 时优先填 `http://localhost:17680`，避免 `SameSite=Lax` cookie 因 `localhost` / `127.0.0.1` 混用不发送。
 3. 从 runtime/state 目录读取本次启动的 `launch.secret`，输入后建立 browser session。不要把 `bearer.token` 填到浏览器或写进 `localStorage`。
-4. `我的素材`、`我的提示词`、画布项目库、工作台 text/image/video 生成记录、电商工作流私有模板、local run/artifact 基础记录和工作流入口自定义文件夹通过 `opsc serve` 读写 workspace；图片/视频工作台结果保存成功后从 workbench-log 文件端点回显；浏览器 localforage/localStorage 只保留 `opsc:asset_store_cache:v1`、`opsc:prompt_store_cache:v1`、`opsc:canvas_store_cache:v1` 展示缓存、loopback `baseUrl` 或生成中/上传中的临时媒体状态。旧 `infinite-canvas:*`、`text_generation_logs`、`image_generation_logs`、`video_generation_logs`、`ops-canvas-workflow-folders` 测试数据不迁移。本地模板当前可创建 local run，另开终端执行 `go run ./cmd/opsc executor --workspace ~/OpsCanvas` 可领取并执行固定本地素材、文本生成和图片生成最小节点集；现有 PDD/VPS run 仍不迁移。
+4. `我的素材`、`我的提示词`、画布项目库、工作台 text/image/video 生成记录、电商工作流私有模板、local run/artifact 基础记录和工作流入口自定义文件夹通过 `opsc serve` 读写 workspace；图片/视频工作台结果保存成功后从 workbench-log 文件端点回显；浏览器 localforage/localStorage 只保留 `opsc:asset_store_cache:v1`、`opsc:prompt_store_cache:v1`、`opsc:canvas_store_cache:v1` 展示缓存、loopback `baseUrl` 或生成中/上传中的临时媒体状态。旧 `infinite-canvas:*`、`text_generation_logs`、`image_generation_logs`、`video_generation_logs`、`ops-canvas-workflow-folders` 测试数据不迁移。本地模板当前可创建 local run，另开终端执行 `go run ./cmd/opsc executor --workspace ~/OpsCanvas --watch --poll-interval 5s` 可领取并执行固定本地素材、文本生成、图片生成和 hybrid VPS-backed run；现有 PDD/VPS run 仍不迁移。
 
 ## Test / Typecheck / Build Commands
 

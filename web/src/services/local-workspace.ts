@@ -213,6 +213,8 @@ export type LocalRunNodeStateSummary = {
     startedAt?: string;
     finishedAt?: string;
     error?: string;
+    output?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
     revision: number;
     updatedAt: string;
 };

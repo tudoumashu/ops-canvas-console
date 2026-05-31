@@ -26,6 +26,8 @@ const (
 	hybridRemoteRunSynced    = "hybrid.remote_run.synced"
 	hybridRemoteRunCompleted = "hybrid.remote_run.completed"
 	hybridRemoteRunFailed    = "hybrid.remote_run.failed"
+	hybridCredentialProfile  = "profileChannel"
+	hybridCredentialEnv      = "envSecretRefDiagnostic"
 )
 
 type HybridEcommerceImportOptions struct {
@@ -234,6 +236,9 @@ func ImportHybridEcommerceTemplate(ctx context.Context, opts HybridEcommerceImpo
 	if summary != nil {
 		result.SecretRef = summary
 	}
+	if strings.TrimSpace(opts.ProfileID) == "" && strings.TrimSpace(opts.SecretEnv) != "" {
+		result.Warnings = append(result.Warnings, "direct env secretRef is for CLI smoke diagnostics; use a workspace profile/channel secretRef for Web and watch worker runs")
+	}
 	return result, nil
 }
 
@@ -341,14 +346,17 @@ func upsertHybridEcommerceTemplate(workspace Workspace, remote hybridPDDTemplate
 			"sourceFingerprint": hybridRemoteTemplateFingerprint(remote),
 			"profileId":         strings.TrimSpace(config.ProfileID),
 			"channelId":         strings.TrimSpace(config.ChannelID),
+			"credentialMode":    hybridCredentialProfile,
 		},
 	}
 	hybrid := metadata[hybridEcommerceKey].(map[string]any)
 	if strings.TrimSpace(config.BaseURL) != "" && strings.TrimSpace(config.ProfileID) == "" {
 		hybrid["baseUrl"] = strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
+		hybrid["credentialMode"] = hybridCredentialEnv
 	}
 	if config.SecretRef != nil && strings.TrimSpace(config.ProfileID) == "" {
 		hybrid["secretRef"] = *config.SecretRef
+		hybrid["credentialMode"] = hybridCredentialEnv
 	}
 	data := TemplateData{
 		Title:        nonEmptyString(remote.Title, "Hybrid Ecommerce Template"),
@@ -469,8 +477,16 @@ func executeHybridEcommerceRun(ctx context.Context, workspace Workspace, run Env
 		if _, err := appendExecutorEvent(workspace, run.ID, executorEventClaimed, "info", "Hybrid ecommerce executor claimed run", map[string]any{"templateId": run.Data.TemplateID}); err != nil {
 			return runResult, err
 		}
-	} else if _, err := appendExecutorEvent(workspace, run.ID, executorEventResumed, "info", "Hybrid ecommerce executor resumed run", nil); err != nil {
-		return runResult, err
+	} else {
+		resumed, err := runHasEvent(workspace, run.ID, executorEventResumed)
+		if err != nil {
+			return runResult, err
+		}
+		if !resumed {
+			if _, err := appendExecutorEvent(workspace, run.ID, executorEventResumed, "info", "Hybrid ecommerce executor resumed run", nil); err != nil {
+				return runResult, err
+			}
+		}
 	}
 	run, err = ReadRun(workspace, run.ID)
 	if err != nil {
@@ -525,6 +541,10 @@ func executeHybridEcommerceRun(ctx context.Context, workspace Workspace, run Env
 		if runResult.Status == RunStatusSuccess || runResult.Status == RunStatusError {
 			return runResult, nil
 		}
+		if opts.HybridSingleSync {
+			runResult.Status = RunStatusRunning
+			return runResult, nil
+		}
 		if config.MaxPoll > 0 && time.Since(startedAt) >= config.MaxPoll {
 			runResult.Status = RunStatusRunning
 			return runResult, nil
@@ -557,6 +577,9 @@ func syncHybridRemoteOverview(ctx context.Context, workspace Workspace, runID st
 	if err != nil {
 		return Envelope[RunData]{}, runResult, err
 	}
+	previousHybrid := hybridEcommerceRunMetadata(current)
+	progressSignature := hybridRemoteProgressSignature(overview)
+	progressChanged := progressSignature != "" && stringFromMap(previousHybrid, "lastProgressSignature") != progressSignature
 	statusForSync := status
 	if status == RunStatusSuccess || status == RunStatusError {
 		statusForSync = RunStatusRunning
@@ -566,20 +589,26 @@ func syncHybridRemoteOverview(ctx context.Context, workspace Workspace, runID st
 		return Envelope[RunData]{}, runResult, err
 	}
 	if _, err := patchHybridRunMetadata(workspace, runID, map[string]any{
-		"backend":           hybridEcommerceBackend,
-		"remoteTemplateId":  config.RemoteTemplateID,
-		"remoteRunId":       remoteRunID,
-		"remoteStatus":      overview.Run.Status,
-		"lastSyncedAt":      timeNowRFC3339(),
-		"productTotal":      overview.Run.ProductTotal,
-		"completedProducts": overview.Run.CompletedProducts,
-		"failedProducts":    overview.Run.FailedProducts,
+		"backend":               hybridEcommerceBackend,
+		"remoteTemplateId":      config.RemoteTemplateID,
+		"remoteRunId":           remoteRunID,
+		"remoteStatus":          overview.Run.Status,
+		"lastSyncedAt":          timeNowRFC3339(),
+		"productTotal":          overview.Run.ProductTotal,
+		"completedProducts":     overview.Run.CompletedProducts,
+		"failedProducts":        overview.Run.FailedProducts,
+		"runningProducts":       overview.Run.RunningProducts,
+		"lastProgressSignature": progressSignature,
 	}); err != nil {
 		return Envelope[RunData]{}, runResult, err
 	}
-	if _, err := appendExecutorEvent(workspace, runID, hybridRemoteRunSynced, "info", "Remote ecommerce run synced", output); err != nil {
-		return Envelope[RunData]{}, runResult, err
+	if progressChanged || stringFromMap(previousHybrid, "remoteStatus") == "" {
+		if _, err := appendExecutorEvent(workspace, runID, hybridRemoteRunSynced, "info", "Remote ecommerce run synced", hybridRemoteProgressEventData(output, overview)); err != nil {
+			return Envelope[RunData]{}, runResult, err
+		}
 	}
+	runResult.Status = statusForSync
+	runResult.Executed = 1
 	if status == RunStatusSuccess || status == RunStatusError {
 		artifactCount, err := syncHybridRemoteArtifacts(ctx, workspace, runID, client, config, remoteRunID, overview.Products)
 		if err != nil {
@@ -655,11 +684,23 @@ func writeHybridStageStates(workspace Workspace, runID string, stages []hybridPD
 			Output:   output,
 			Metadata: map[string]any{"source": "hybrid_ecommerce_vps", "title": stage.Title, "type": stage.Type},
 		}
+		if existing, ok := current[nodeID]; ok {
+			data.StartedAt = existing.Data.StartedAt
+			data.FinishedAt = existing.Data.FinishedAt
+		}
 		if state == RunStatusRunning {
-			data.StartedAt = timeNowRFC3339()
+			if data.StartedAt == "" {
+				data.StartedAt = timeNowRFC3339()
+			}
+			data.FinishedAt = ""
 		}
 		if state == RunStatusSuccess || state == RunStatusError || state == RunStatusCanceled {
-			data.FinishedAt = timeNowRFC3339()
+			if data.StartedAt == "" {
+				data.StartedAt = timeNowRFC3339()
+			}
+			if data.FinishedAt == "" || current[nodeID].Data.Status != state {
+				data.FinishedAt = timeNowRFC3339()
+			}
 		}
 		if state == RunStatusError {
 			data.Error = recentError
@@ -669,6 +710,69 @@ func writeHybridStageStates(workspace Workspace, runID string, stages []hybridPD
 		}
 	}
 	return nil
+}
+
+func hybridRemoteProgressSignature(overview hybridPDDOverview) string {
+	type stageSig struct {
+		ID      string `json:"id"`
+		Status  string `json:"status"`
+		Total   int    `json:"total"`
+		Success int    `json:"success"`
+		Failed  int    `json:"failed"`
+		Running int    `json:"running"`
+		Idle    int    `json:"idle"`
+		Skipped int    `json:"skipped"`
+	}
+	stages := make([]stageSig, 0, len(overview.Stages))
+	for _, stage := range overview.Stages {
+		stages = append(stages, stageSig{
+			ID:      stage.ID,
+			Status:  stage.Status,
+			Total:   stage.Total,
+			Success: stage.Success,
+			Failed:  stage.Failed,
+			Running: stage.Running,
+			Idle:    stage.Idle,
+			Skipped: stage.Skipped,
+		})
+	}
+	payload := map[string]any{
+		"status":            overview.Run.Status,
+		"completed":         overview.Run.Completed,
+		"productTotal":      overview.Run.ProductTotal,
+		"completedProducts": overview.Run.CompletedProducts,
+		"failedProducts":    overview.Run.FailedProducts,
+		"runningProducts":   overview.Run.RunningProducts,
+		"stages":            stages,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(encoded)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func hybridRemoteProgressEventData(output map[string]any, overview hybridPDDOverview) map[string]any {
+	data := cloneMap(output)
+	stages := make([]map[string]any, 0, len(overview.Stages))
+	for _, stage := range overview.Stages {
+		stages = append(stages, map[string]any{
+			"id":      stage.ID,
+			"title":   stage.Title,
+			"status":  hybridNodeStatus(stage.Status),
+			"total":   stage.Total,
+			"success": stage.Success,
+			"failed":  stage.Failed,
+			"running": stage.Running,
+			"idle":    stage.Idle,
+			"skipped": stage.Skipped,
+		})
+	}
+	if len(stages) > 0 {
+		data["stages"] = stages
+	}
+	return data
 }
 
 func syncHybridRemoteArtifacts(ctx context.Context, workspace Workspace, runID string, client hybridVPSClient, config hybridEcommerceConfig, remoteRunID string, products []hybridPDDProduct) (int, error) {

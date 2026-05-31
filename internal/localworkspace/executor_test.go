@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 const executorTestPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/l6r3JwAAAABJRU5ErkJggg=="
@@ -500,6 +502,115 @@ func TestHybridEcommerceImportAndExecutorSyncsRemoteRun(t *testing.T) {
 	}
 }
 
+func TestRunExecutorWatchSyncsHybridRunUntilTerminal(t *testing.T) {
+	t.Setenv("OPSC_HYBRID_TEST_TOKEN", "remote-secret")
+	root := filepath.Join(t.TempDir(), "workspace")
+	workspace, profileID, _ := seedExecutorWorkspace(t, root)
+
+	var remoteRunID string
+	var startCalls atomic.Int32
+	var overviewCalls atomic.Int32
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/admin/workflows/pdd/templates/remote_tpl":
+			_, _ = io.WriteString(w, `{"code":0,"data":{"id":"remote_tpl","workflowType":"pdd","title":"Watch Ecommerce","spec":{"version":1,"nodes":[{"id":"stage_generate","operation":"image_generation","title":"Generate"}],"edges":[],"settings":{"productConcurrency":1,"maxRetries":0}}},"msg":"ok"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/admin/workflows/pdd/templates/remote_tpl/runs":
+			startCalls.Add(1)
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode start payload: %v", err)
+			}
+			remoteRunID = payload["runId"].(string)
+			_, _ = io.WriteString(w, `{"code":0,"data":{"runId":"`+remoteRunID+`"},"msg":"ok"}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/overview"):
+			call := overviewCalls.Add(1)
+			if call == 1 {
+				_, _ = io.WriteString(w, `{"code":0,"data":{"run":{"runId":"`+remoteRunID+`","status":"running","completed":false,"productTotal":1,"runningProducts":1},"stages":[{"id":"stage_generate","title":"Generate","status":"running","total":1,"running":1}],"products":[{"key":"prod_1","product":"Mug","status":"running"}]},"msg":"ok"}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"code":0,"data":{"run":{"runId":"`+remoteRunID+`","status":"success","completed":true,"productTotal":1,"completedProducts":1},"stages":[{"id":"stage_generate","title":"Generate","status":"success","total":1,"success":1}],"products":[{"key":"prod_1","product":"Mug","status":"success"}]},"msg":"ok"}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/product-detail"):
+			_, _ = io.WriteString(w, `{"code":0,"data":{"runId":"`+remoteRunID+`","product":{"key":"prod_1","product":"Mug","status":"success"},"nodes":[{"id":"stage_generate","type":"image_generation","title":"Generate","status":"success","artifacts":[{"id":"a1","title":"Preview","path":"logs/custom_workflow/products/prod_1/nodes/stage_generate/output.png","kind":"image","mimeType":"image/png"}]}]},"msg":"ok"}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/file"):
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte("png-bytes"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer remote.Close()
+
+	profile := readExecutorProfile(t, workspace, profileID)
+	profile.Data.Channels[0].Protocol = "ops-canvas-vps"
+	profile.Data.Channels[0].BaseURL = remote.URL
+	profile.Data.Channels[0].SecretRef = &SecretRef{Type: SecretRefTypeEnv, Name: "OPSC_HYBRID_TEST_TOKEN"}
+	if err := WriteProfile(workspace, profile); err != nil {
+		t.Fatalf("WriteProfile() error = %v", err)
+	}
+	imported, err := ImportHybridEcommerceTemplate(context.Background(), HybridEcommerceImportOptions{
+		WorkspacePath:    root,
+		RemoteTemplateID: "remote_tpl",
+		ProfileID:        profileID,
+		ChannelID:        "openai",
+		HTTPClient:       remote.Client(),
+	})
+	if err != nil {
+		t.Fatalf("ImportHybridEcommerceTemplate() error = %v", err)
+	}
+	draft, err := CreateHybridEcommerceRun(context.Background(), HybridEcommerceRunOptions{
+		WorkspacePath: root,
+		TemplateID:    imported.Template.ID,
+		ProfileID:     profileID,
+		Input:         map[string]any{"inputs": []map[string]any{{"productTitle": "Mug"}}},
+	})
+	if err != nil {
+		t.Fatalf("CreateHybridEcommerceRun() error = %v", err)
+	}
+
+	result, err := RunExecutorWatch(context.Background(), ExecutorWatchOptions{
+		ExecutorOptions: ExecutorOptions{WorkspacePath: root, RunID: draft.Run.ID, HTTPClient: remote.Client()},
+		PollInterval:    time.Millisecond,
+		MaxIterations:   3,
+	})
+	if err != nil {
+		t.Fatalf("RunExecutorWatch() error = %v", err)
+	}
+	if startCalls.Load() != 1 || overviewCalls.Load() < 2 {
+		t.Fatalf("remote calls start=%d overview=%d, want one start and repeated sync", startCalls.Load(), overviewCalls.Load())
+	}
+	if result.Processed < 2 {
+		t.Fatalf("watch result = %#v, want at least dispatch and sync iterations", result)
+	}
+	status, err := GetRunStatus(workspace, draft.Run.ID)
+	if err != nil {
+		t.Fatalf("GetRunStatus() error = %v", err)
+	}
+	if status.Run.Status != RunStatusSuccess || status.Run.ArtifactCount != 1 {
+		t.Fatalf("run status = %#v, want success with one artifact", status.Run)
+	}
+	if len(status.Nodes) != 1 || status.Nodes[0].Output["total"] == nil || status.Nodes[0].Output["success"] == nil {
+		t.Fatalf("node status summary = %#v, want indexed remote progress output", status.Nodes)
+	}
+	events, err := ReadRunEvents(workspace, draft.Run.ID, 0)
+	if err != nil {
+		t.Fatalf("ReadRunEvents() error = %v", err)
+	}
+	if countRunEventTypes(events, hybridRemoteRunSynced) < 2 {
+		t.Fatalf("events = %#v, want synced events for running and terminal progress", events)
+	}
+	if countRunEventTypes(events, executorEventResumed) > 1 {
+		t.Fatalf("events = %#v, want resumed event deduped", events)
+	}
+	encoded, err := json.Marshal(map[string]any{"result": result, "status": status, "events": events})
+	if err != nil {
+		t.Fatalf("marshal observed data: %v", err)
+	}
+	if strings.Contains(string(encoded), "remote-secret") {
+		t.Fatalf("watch output leaked secret: %s", encoded)
+	}
+}
+
 func TestHybridEcommerceRedactsRemoteErrors(t *testing.T) {
 	t.Setenv("OPSC_HYBRID_TEST_TOKEN", "remote-secret")
 	root := filepath.Join(t.TempDir(), "workspace")
@@ -830,6 +941,16 @@ func runEventTypesContain(events []RunEventEnvelope, eventType string) bool {
 		}
 	}
 	return false
+}
+
+func countRunEventTypes(events []RunEventEnvelope, eventType string) int {
+	count := 0
+	for _, event := range events {
+		if event.Type == eventType {
+			count++
+		}
+	}
+	return count
 }
 
 func executorTestStateMap(states []Envelope[RunNodeStateData]) map[string]Envelope[RunNodeStateData] {

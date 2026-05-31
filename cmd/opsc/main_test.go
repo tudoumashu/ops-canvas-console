@@ -410,6 +410,76 @@ func TestExecutorCommandJSONProcessesTextStaticRun(t *testing.T) {
 	}
 }
 
+func TestExecutorWatchCommandJSONStreamsProcessedIteration(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspace")
+	result, err := localworkspace.Init(localworkspace.InitOptions{Path: root, Name: "Executor Watch CLI Workspace"})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	workspace := result.Workspace
+	template, err := localworkspace.NewTemplate(workspace, localworkspace.TemplateData{
+		Title:        "Executor Watch Template",
+		WorkflowType: "generic",
+		Version:      1,
+		Nodes: []json.RawMessage{
+			json.RawMessage(`{"id":"copy","type":"text_static","operation":"text_static","title":"Copy","prompt":"Hello {{input.productTitle}}"}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewTemplate() error = %v", err)
+	}
+	if err := localworkspace.WriteTemplate(workspace, template); err != nil {
+		t.Fatalf("WriteTemplate() error = %v", err)
+	}
+	runDoc, err := localworkspace.NewRun(workspace, localworkspace.RunData{
+		TemplateID: template.ID,
+		Status:     localworkspace.RunStatusPending,
+		Input:      map[string]any{"productTitle": "Mug"},
+	})
+	if err != nil {
+		t.Fatalf("NewRun() error = %v", err)
+	}
+	if err := localworkspace.WriteRun(workspace, runDoc); err != nil {
+		t.Fatalf("WriteRun() error = %v", err)
+	}
+	if _, err := localworkspace.AppendRunEvent(workspace, runDoc.ID, localworkspace.RunEventInput{
+		Type:    "run.waiting_for_executor",
+		Level:   "info",
+		Actor:   localworkspace.RunEventActor{Type: "web", ID: "ops-canvas-web"},
+		Message: "Local run draft created",
+		Data:    map[string]any{"mode": "local"},
+	}); err != nil {
+		t.Fatalf("AppendRunEvent() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stdout := &cancelAfterLineWriter{cancel: cancel}
+	var stderr bytes.Buffer
+	code := runWithContext(ctx, []string{"executor", "--watch", "--poll-interval=1ms", "--workspace", root, "--run", runDoc.ID, "--json"}, stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("executor --watch exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %s, want empty", stderr.String())
+	}
+	var envelope successEnvelope
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout.String())), &envelope); err != nil {
+		t.Fatalf("watch output is not one JSON envelope: %v\n%s", err, stdout.String())
+	}
+	encoded, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+	for _, want := range []string{`"ok":true`, `"processed":1`, `"status":"success"`} {
+		if !strings.Contains(string(encoded), want) {
+			t.Fatalf("watch output missing %q:\n%s", want, encoded)
+		}
+	}
+	if strings.Contains(stdout.String(), root) {
+		t.Fatalf("stdout leaked workspace path: %s", stdout.String())
+	}
+}
+
 func TestEcommerceImportTemplateCommandJSONRedactsSecretAndPath(t *testing.T) {
 	t.Setenv("OPSC_HYBRID_CLI_TOKEN", "cli-remote-secret")
 	root := filepath.Join(t.TempDir(), "workspace")

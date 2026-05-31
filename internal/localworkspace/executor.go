@@ -43,10 +43,18 @@ const (
 var templateVarPattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
 
 type ExecutorOptions struct {
-	WorkspacePath string
-	RunID         string
-	HTTPClient    *http.Client
-	Now           func() time.Time
+	WorkspacePath    string
+	RunID            string
+	HybridSingleSync bool
+	HTTPClient       *http.Client
+	Now              func() time.Time
+}
+
+type ExecutorWatchOptions struct {
+	ExecutorOptions
+	PollInterval  time.Duration
+	MaxIterations int
+	OnResult      func(ExecutorResult) error
 }
 
 type ExecutorResult struct {
@@ -147,6 +155,49 @@ func RunExecutorOnce(ctx context.Context, opts ExecutorOptions) (ExecutorResult,
 		result.Processed++
 	}
 	return result, nil
+}
+
+func RunExecutorWatch(ctx context.Context, opts ExecutorWatchOptions) (ExecutorResult, error) {
+	interval := opts.PollInterval
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	aggregate := ExecutorResult{}
+	for iteration := 0; ; iteration++ {
+		if err := ctx.Err(); err != nil {
+			return aggregate, nil
+		}
+		once := opts.ExecutorOptions
+		once.HybridSingleSync = true
+		result, err := RunExecutorOnce(ctx, once)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return aggregate, nil
+			}
+			return aggregate, err
+		}
+		if aggregate.WorkspaceID == "" {
+			aggregate.WorkspaceID = result.WorkspaceID
+		}
+		aggregate.Processed += result.Processed
+		aggregate.Runs = append(aggregate.Runs, result.Runs...)
+		aggregate.Warnings = append(aggregate.Warnings, result.Warnings...)
+		if opts.OnResult != nil && (result.Processed > 0 || len(result.Warnings) > 0) {
+			if err := opts.OnResult(result); err != nil {
+				return aggregate, err
+			}
+		}
+		if opts.MaxIterations > 0 && iteration+1 >= opts.MaxIterations {
+			return aggregate, nil
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return aggregate, nil
+		case <-timer.C:
+		}
+	}
 }
 
 func executorCandidateRuns(workspace Workspace, runID string) ([]Envelope[RunData], error) {

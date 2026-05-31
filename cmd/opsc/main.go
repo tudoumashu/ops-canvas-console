@@ -23,6 +23,8 @@ type cliOptions struct {
 	Name             string
 	RunID            string
 	Follow           bool
+	Watch            bool
+	PollInterval     time.Duration
 	Host             string
 	Port             int
 	Origins          []string
@@ -136,6 +138,35 @@ func runExecutorCommand(ctx context.Context, opts cliOptions, stdout io.Writer, 
 	if len(opts.Command) != 1 {
 		return writeError(stderr, opts.JSON, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "executor does not accept subcommands", 1, nil))
 	}
+	executorOptions := localworkspace.ExecutorOptions{
+		WorkspacePath: opts.Workspace,
+		RunID:         opts.RunID,
+	}
+	if opts.Watch {
+		if !opts.JSON {
+			fmt.Fprintln(stderr, "opsc executor watch mode started")
+		}
+		result, err := localworkspace.RunExecutorWatch(ctx, localworkspace.ExecutorWatchOptions{
+			ExecutorOptions: executorOptions,
+			PollInterval:    opts.PollInterval,
+			OnResult: func(result localworkspace.ExecutorResult) error {
+				if opts.JSON {
+					return writeSuccessLine(stdout, result, result.Warnings)
+				}
+				writeExecutorResult(stdout, stderr, result)
+				return nil
+			},
+		})
+		if err != nil {
+			return writeError(stderr, opts.JSON, asCLIError(err))
+		}
+		if opts.JSON && result.Processed == 0 && len(result.Warnings) > 0 {
+			if err := writeSuccessLine(stdout, result, result.Warnings); err != nil {
+				return writeError(stderr, opts.JSON, asCLIError(err))
+			}
+		}
+		return 0
+	}
 	result, err := localworkspace.RunExecutorOnce(ctx, localworkspace.ExecutorOptions{
 		WorkspacePath: opts.Workspace,
 		RunID:         opts.RunID,
@@ -146,6 +177,11 @@ func runExecutorCommand(ctx context.Context, opts cliOptions, stdout io.Writer, 
 	if opts.JSON {
 		return writeSuccess(stdout, result, result.Warnings)
 	}
+	writeExecutorResult(stdout, stderr, result)
+	return 0
+}
+
+func writeExecutorResult(stdout io.Writer, stderr io.Writer, result localworkspace.ExecutorResult) {
 	fmt.Fprintf(stdout, "Executor processed %d run(s)\n", result.Processed)
 	for _, run := range result.Runs {
 		line := fmt.Sprintf("- %s\t%s\texecuted=%d\tskipped=%d\tartifacts=%d", run.RunID, run.Status, run.Executed, run.Skipped, run.ArtifactRefs)
@@ -157,7 +193,6 @@ func runExecutorCommand(ctx context.Context, opts cliOptions, stdout io.Writer, 
 	for _, warning := range result.Warnings {
 		fmt.Fprintf(stderr, "warning: %s\n", warning)
 	}
-	return 0
 }
 
 func runEcommerceCommand(ctx context.Context, opts cliOptions, stdout io.Writer, stderr io.Writer) int {
@@ -741,6 +776,8 @@ func parseArgs(args []string) (cliOptions, error) {
 			opts.JSON = true
 		case arg == "--follow":
 			opts.Follow = true
+		case arg == "--watch":
+			opts.Watch = true
 		case arg == "--show-paths":
 			opts.ShowPaths = true
 		case arg == "--workspace":
@@ -799,6 +836,22 @@ func parseArgs(args []string) (cliOptions, error) {
 			opts.RunID = args[i]
 		case strings.HasPrefix(arg, "--run="):
 			opts.RunID = strings.TrimPrefix(arg, "--run=")
+		case arg == "--poll-interval":
+			i++
+			if i >= len(args) {
+				return opts, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "--poll-interval requires a value", 1, nil)
+			}
+			value, err := parseDurationFlag(args[i], "--poll-interval")
+			if err != nil {
+				return opts, err
+			}
+			opts.PollInterval = value
+		case strings.HasPrefix(arg, "--poll-interval="):
+			value, err := parseDurationFlag(strings.TrimPrefix(arg, "--poll-interval="), "--poll-interval")
+			if err != nil {
+				return opts, err
+			}
+			opts.PollInterval = value
 		case arg == "--remote-url":
 			i++
 			if i >= len(args) {
@@ -856,6 +909,24 @@ func parseArgs(args []string) (cliOptions, error) {
 	return opts, nil
 }
 
+func parseDurationFlag(value string, flag string) (time.Duration, error) {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		return 0, localworkspace.NewError(localworkspace.ErrorInvalidArgument, flag+" requires a value", 1, nil)
+	}
+	if duration, err := time.ParseDuration(raw); err == nil {
+		if duration <= 0 {
+			return 0, localworkspace.NewError(localworkspace.ErrorInvalidArgument, flag+" must be positive", 1, nil)
+		}
+		return duration, nil
+	}
+	seconds, err := strconv.ParseFloat(raw, 64)
+	if err != nil || seconds <= 0 {
+		return 0, localworkspace.NewError(localworkspace.ErrorInvalidArgument, flag+" must be a positive duration", 1, nil)
+	}
+	return time.Duration(seconds * float64(time.Second)), nil
+}
+
 func writeSuccess(stdout io.Writer, data any, warnings []string) int {
 	if warnings == nil {
 		warnings = []string{}
@@ -864,6 +935,13 @@ func writeSuccess(stdout io.Writer, data any, warnings []string) int {
 	encoder.SetIndent("", "  ")
 	_ = encoder.Encode(successEnvelope{OK: true, Data: data, Warnings: warnings})
 	return 0
+}
+
+func writeSuccessLine(stdout io.Writer, data any, warnings []string) error {
+	if warnings == nil {
+		warnings = []string{}
+	}
+	return json.NewEncoder(stdout).Encode(successEnvelope{OK: true, Data: data, Warnings: warnings})
 }
 
 func writeDoctorJSON(stdout io.Writer, report *localworkspace.DoctorReport) {
