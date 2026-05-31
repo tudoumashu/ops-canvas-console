@@ -611,6 +611,68 @@ func TestRunExecutorWatchSyncsHybridRunUntilTerminal(t *testing.T) {
 	}
 }
 
+func TestRunExecutorWatchWritesRuntimeAndPreventsSecondWorker(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
+	root := filepath.Join(t.TempDir(), "workspace")
+	workspace, _, _ := seedExecutorWorkspace(t, root)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := RunExecutorWatch(ctx, ExecutorWatchOptions{
+			ExecutorOptions: ExecutorOptions{WorkspacePath: root},
+			PollInterval:    10 * time.Millisecond,
+		})
+		done <- err
+	}()
+	t.Cleanup(cancel)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		status := readExecutorRuntimeStatus(workspace)
+		if status.Active && status.Mode == "watch" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("executor runtime did not become active; last status = %#v", readExecutorRuntimeStatus(workspace))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	report, err := Doctor(DoctorOptions{Path: root})
+	if err != nil {
+		t.Fatalf("Doctor() error = %v", err)
+	}
+	if !doctorCheckMessageContains(report, "executor_worker", "active") {
+		t.Fatalf("Doctor() missing active executor worker check: %#v", report.Checks)
+	}
+
+	_, err = RunExecutorWatch(context.Background(), ExecutorWatchOptions{
+		ExecutorOptions: ExecutorOptions{WorkspacePath: root},
+		PollInterval:    time.Millisecond,
+		MaxIterations:   1,
+	})
+	if err == nil {
+		t.Fatal("second RunExecutorWatch() error = nil, want workspace_locked")
+	}
+	var workspaceErr *Error
+	if !asWorkspaceError(err, &workspaceErr) || workspaceErr.Code != ErrorWorkspaceLocked {
+		t.Fatalf("second RunExecutorWatch() error = %#v, want workspace_locked", err)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunExecutorWatch() after cancel error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunExecutorWatch() did not stop after cancel")
+	}
+	if status := readExecutorRuntimeStatus(workspace); status.Active || status.Exists {
+		t.Fatalf("executor runtime after shutdown = %#v, want cleaned up", status)
+	}
+}
+
 func TestHybridEcommerceRedactsRemoteErrors(t *testing.T) {
 	t.Setenv("OPSC_HYBRID_TEST_TOKEN", "remote-secret")
 	root := filepath.Join(t.TempDir(), "workspace")
@@ -937,6 +999,15 @@ func marshalExecutorRaw(t *testing.T, value any) json.RawMessage {
 func runEventTypesContain(events []RunEventEnvelope, eventType string) bool {
 	for _, event := range events {
 		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+func doctorCheckMessageContains(report *DoctorReport, name string, part string) bool {
+	for _, check := range report.Checks {
+		if check.Name == name && strings.Contains(check.Message, part) {
 			return true
 		}
 	}

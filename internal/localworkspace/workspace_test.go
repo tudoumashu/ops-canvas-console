@@ -235,6 +235,72 @@ func TestDoctorReportsBrokenRefsSecretRefsAndProjectRoot(t *testing.T) {
 	}
 }
 
+func TestDoctorReportsIndexFreshnessStaleExecutorAndHybridRepair(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
+	root := filepath.Join(t.TempDir(), "workspace")
+	result, err := Init(InitOptions{Path: root})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	workspace := result.Workspace
+	writeTestObject(t, root, "templates", "tpl_hybrid", "template.json", "template", map[string]any{
+		"title": "Hybrid template",
+		"metadata": map[string]any{
+			hybridEcommerceKey: map[string]any{"backend": hybridEcommerceBackend},
+		},
+	})
+	writeTestObject(t, root, "runs", "run_hybrid", "run.json", "run", map[string]any{
+		"templateId": "tpl_hybrid",
+		"status":     RunStatusPending,
+	})
+	if _, err := AppendRunEvent(workspace, "run_hybrid", RunEventInput{
+		Type:    "run.waiting_for_executor",
+		Level:   "info",
+		Actor:   RunEventActor{Type: "web", ID: "test"},
+		Message: "run created",
+	}); err != nil {
+		t.Fatalf("AppendRunEvent() error = %v", err)
+	}
+	if _, err := workspace.StateDir(); err != nil {
+		t.Fatalf("StateDir() error = %v", err)
+	}
+	lock, err := AcquireLock(workspace.LockPath(executorWatchLock))
+	if err != nil {
+		t.Fatalf("AcquireLock(executor watch) error = %v", err)
+	}
+	defer lock.Release()
+	if err := writeExecutorRuntimeFiles(workspace, ExecutorRuntimeMetadata{
+		SchemaVersion: SchemaVersion,
+		PID:           999999,
+		WorkspaceID:   workspace.Document.ID,
+		Mode:          "watch",
+		StartedAt:     time.Now().UTC().Format(time.RFC3339),
+		HeartbeatAt:   time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("writeExecutorRuntimeFiles() error = %v", err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(filepath.Join(root, IndexFileName), old, old); err != nil {
+		t.Fatalf("chtimes index: %v", err)
+	}
+
+	report, err := Doctor(DoctorOptions{Path: root})
+	if err != nil {
+		t.Fatalf("Doctor() error = %v", err)
+	}
+	joined := strings.Join(append(report.Errors, report.Warnings...), "\n")
+	wants := []string{
+		"index.sqlite may be stale; run opsc workspace index rebuild",
+		"executor worker runtime is stale; restart opsc executor --watch",
+		"hybrid run is waiting for executor: run_hybrid; start opsc executor --watch",
+	}
+	for _, want := range wants {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("Doctor() diagnostics missing %q:\n%s", want, joined)
+		}
+	}
+}
+
 func TestAcquireLockPreventsSecondLock(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "workspace.lock")
 	first, err := AcquireLock(path)

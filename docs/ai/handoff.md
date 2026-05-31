@@ -2,7 +2,7 @@
 
 ## Current Objective
 
-Phase 12 hybrid ecommerce Web + worker 黄金路径已收口到真实 Web UI + `opsc executor --watch` smoke：local workspace 仍是 canonical source；已确认的远端 PDD 电商模板可通过 `opsc ecommerce import-template` 重建为本地 template，并通过 CLI 或 Web UI 创建 pending local run、template snapshot、pending node state 和 `run.waiting_for_executor` event；executor 使用 profile/channel `secretRef` 调 VPS PDD API 创建远端 run、同步状态、阶段进度和关键 artifact，再写回本地 run/node state/events/artifact ref。fake VPS browser smoke、headless 真实 VPS smoke 和真实 VPS-backed Web UI smoke 均已通过。现有 PDD/VPS run 历史不迁移，VPS run dir 不作为事实源，浏览器不保存或发送 VPS admin credential，MCP 写面不扩大。
+Phase 13 已把 hybrid ecommerce Web + `opsc executor --watch` 黄金路径从“可跑通”推进到“可长期运行/可诊断/可安装/可回归”：local workspace 仍是 canonical source；已确认的远端 PDD 电商模板可通过 `opsc ecommerce import-template` 重建为本地 template，并通过 CLI 或 Web UI 创建 pending local run；executor watch 使用单 worker lock、runtime metadata 和 doctor 诊断持续同步远端状态、阶段进度和关键 artifact，再写回本地 run/node state/events/artifact ref。fake VPS browser smoke、headless 真实 VPS smoke 和真实 VPS-backed Web UI smoke 已通过；Phase 13 新增可复用非临时浏览器 profile smoke 入口和安装/自启动文档。现有 PDD/VPS run 历史不迁移，VPS run dir 不作为事实源，浏览器不保存或发送 VPS admin credential，MCP 写面不扩大。
 
 ## Completed Work
 
@@ -17,6 +17,8 @@ Phase 12 hybrid ecommerce Web + worker 黄金路径已收口到真实 Web UI + `
 - Phase 12 新增 `opsc executor --watch` 和 `--poll-interval`：watch 模式短持 workspace lock 处理 pending/running run，hybrid 非终态远端同步会写入阶段进度 node output/metadata 并释放锁等待下一轮；CLI JSON watch 模式按有处理结果的迭代输出 JSON line。
 - Phase 12 Web local hybrid run 路径收口：`local-workflow-templates.ts` 在 Web 启动 local hybrid run 时保留 template hybrid metadata，正式路径要求 profile/channel `secretRef`，生成 run metadata 后仍只通过 `opsc serve` 写 workspace；local run 状态页新增阶段进度列，浏览器不直接调用 VPS API。
 - Phase 12 新增 `tools/hybrid_ecommerce_browser_smoke.py` 和 `docs/manual-test-report-phase12.md`：helper 使用 fake VPS API、真实浏览器、`opsc serve`、模板编辑页“运行模板”和 `opsc executor --watch` 验证 Web 创建 hybrid run、状态页轮询、artifact 预览和 localStorage credential 脱敏；fake browser smoke 已在临时 workspace 通过；真实 VPS-backed Web UI smoke 也已通过，覆盖 Web 模板编辑页启动 run、watch worker 同步真实远端模型资源、本地 run success、5 个 canonical artifact/ref、artifact modal 预览和浏览器持久化脱敏。真实长期个人 workspace、非临时浏览器 profile 和 worker 安装/自启动后的回归仍保留在 `docs/pending-test.md`。
+- Phase 13 新增 executor watch runtime metadata、`executor.watch.lock` 单 worker 约束、优雅退出清理和 doctor 可观测提示；`workspace doctor` 现在会提示 index 可能过期、executor worker stale、hybrid run 等待 executor 或 running 但无 active worker。
+- Phase 13 新增 `docs/opsc-installation.md` 和 `docs/local-workspace-regression.md`；浏览器 smoke helper 支持 `--user-data-dir`、`--evidence` 和 localStorage credential/runtime 检查；README/deployment/features 已移除明显过时的上游 clone/Render 入口并同步当前 local workspace worker 路径。
 - Phase 8 新增稳定化验证：`opsc serve` state/session/auth/redaction、CLI `serve` 输出脱敏、AI proxy `secretRef` 与浏览器 header 隔离、MCP stdio 工具面冻结和诊断/plan/index rebuild smoke、本地模板草稿 run -> canonical artifact -> run artifact ref happy path；同步 README、features、contract、pending-test、todo、CHANGELOG、项目记忆和中央 Wiki。
 - 已和用户拍板 local-first 数据分离基线：私有模板、run、artifact、个人素材、个人 prompt、本地项目路径和本地日志默认本地；云端只保留账号/授权/计费、公共模板、公共素材和商用 profile 能力。
 - 已确认默认 workspace 为 `~/OpsCanvas`，支持多 workspace；项目文件只保存外部路径引用，不复制进 workspace；生成 artifact 复制进 workspace；secrets 不写普通 JSON；`opsc serve` 使用本地随机 bearer token 或 browser session。

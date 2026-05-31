@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type DoctorOptions struct {
@@ -81,9 +82,10 @@ func Doctor(opts DoctorOptions) (*DoctorReport, error) {
 		addCheck("dir:"+dir, true, "info", "required directory exists: "+dir)
 	}
 
-	if stat, err := os.Stat(filepath.Join(resolved.Path, IndexFileName)); err != nil {
+	indexPath := filepath.Join(resolved.Path, IndexFileName)
+	if stat, err := os.Stat(indexPath); err != nil {
 		if os.IsNotExist(err) {
-			addCheck("index", false, "warning", "index.sqlite is missing and can be rebuilt")
+			addCheck("index", false, "warning", "index.sqlite is missing; run opsc workspace index rebuild")
 		} else {
 			return nil, WrapError(ErrorInternal, "stat index", 5, err)
 		}
@@ -91,10 +93,13 @@ func Doctor(opts DoctorOptions) (*DoctorReport, error) {
 		addCheck("index", false, "error", "index.sqlite is a directory")
 	} else {
 		addCheck("index", true, "info", "index.sqlite exists")
+		if err := checkIndexFreshness(resolved.Path, stat.ModTime(), addCheck); err != nil {
+			return nil, err
+		}
 	}
 
+	workspace := Workspace{Root: resolved.Path, Source: resolved.Source, Document: document}
 	if opts.CheckLock {
-		workspace := Workspace{Root: resolved.Path, Source: resolved.Source, Document: document}
 		lockPath, err := workspaceWriteLockPath(workspace)
 		if err != nil {
 			return nil, err
@@ -107,6 +112,7 @@ func Doctor(opts DoctorOptions) (*DoctorReport, error) {
 			addCheck("workspace_lock", true, "info", "workspace write lock is clear")
 		}
 	}
+	checkExecutorRuntime(workspace, addCheck)
 
 	if err := runObjectDoctorChecks(resolved, document, opts.ShowPath, addCheck); err != nil {
 		return nil, err
@@ -128,6 +134,8 @@ type doctorRunData struct {
 	TemplateID   string            `json:"templateId"`
 	ProfileID    string            `json:"profileId"`
 	ProjectID    string            `json:"projectId"`
+	Status       string            `json:"status"`
+	Metadata     map[string]any    `json:"metadata"`
 	ArtifactRefs []json.RawMessage `json:"artifactRefs"`
 }
 
@@ -155,6 +163,7 @@ type secretRefStats struct {
 
 func runObjectDoctorChecks(resolved ResolvedPath, document WorkspaceDocument, showPaths bool, addCheck doctorAddCheck) error {
 	workspace := Workspace{Root: resolved.Path, Source: resolved.Source, Document: document}
+	executorStatus := readExecutorRuntimeStatus(workspace)
 	scan, err := Scan(context.Background(), workspace, ScanOptions{})
 	if err != nil {
 		return err
@@ -178,7 +187,7 @@ func runObjectDoctorChecks(resolved ResolvedPath, document WorkspaceDocument, sh
 	if err := checkProjects(resolved.Path, showPaths, addCheck, stats); err != nil {
 		return err
 	}
-	if err := checkRuns(resolved.Path, addCheck); err != nil {
+	if err := checkRuns(resolved.Path, executorStatus.Active, addCheck); err != nil {
 		return err
 	}
 	if err := checkAssets(resolved.Path, addCheck); err != nil {
@@ -207,6 +216,31 @@ func runObjectDoctorChecks(resolved ResolvedPath, document WorkspaceDocument, sh
 		}
 	}
 	return nil
+}
+
+func checkIndexFreshness(root string, indexModTime time.Time, addCheck doctorAddCheck) error {
+	latest, err := latestCanonicalFileModTime(root)
+	if err != nil {
+		return err
+	}
+	if latest.IsZero() || !latest.After(indexModTime.Add(time.Second)) {
+		addCheck("index_freshness", true, "info", "index.sqlite appears fresh")
+		return nil
+	}
+	addCheck("index_freshness", false, "warning", "index.sqlite may be stale; run opsc workspace index rebuild")
+	return nil
+}
+
+func checkExecutorRuntime(workspace Workspace, addCheck doctorAddCheck) {
+	status := readExecutorRuntimeStatus(workspace)
+	switch {
+	case status.Active:
+		addCheck("executor_worker", true, "info", "executor worker is active")
+	case status.Stale:
+		addCheck("executor_worker", false, "warning", "executor worker runtime is stale; restart opsc executor --watch")
+	default:
+		addCheck("executor_worker", true, "info", "executor worker is not running; start opsc executor --watch for Web-created local runs")
+	}
 }
 
 func scanWarningSeverity(warning string) string {
@@ -316,7 +350,7 @@ func checkProjectCredentialRefs(id string, data doctorProjectData, addCheck doct
 	}
 }
 
-func checkRuns(root string, addCheck doctorAddCheck) error {
+func checkRuns(root string, executorActive bool, addCheck doctorAddCheck) error {
 	return forEachObject(root, "runs", "run.json", func(id string, envelope doctorEnvelope) error {
 		var data doctorRunData
 		if len(envelope.Data) > 0 {
@@ -334,8 +368,72 @@ func checkRuns(root string, addCheck doctorAddCheck) error {
 		if err := checkRunArtifactRefFiles(root, id, addCheck); err != nil {
 			return err
 		}
+		if err := checkHybridRunHealth(root, id, data, executorActive, addCheck); err != nil {
+			return err
+		}
 		return nil
 	})
+}
+
+func checkHybridRunHealth(root string, runID string, data doctorRunData, executorActive bool, addCheck doctorAddCheck) error {
+	if !doctorRunIsHybrid(root, data) {
+		return nil
+	}
+	status := strings.ToLower(strings.TrimSpace(data.Status))
+	switch status {
+	case RunStatusPending:
+		if doctorRunHasEvent(root, runID, "run.waiting_for_executor") {
+			addCheck("hybrid_run:"+runID, false, "warning", "hybrid run is waiting for executor: "+runID+"; start opsc executor --watch")
+		}
+	case RunStatusRunning:
+		if !executorActive {
+			addCheck("hybrid_run:"+runID, false, "warning", "hybrid run is running but no active executor worker was detected: "+runID+"; start opsc executor --watch")
+		}
+	case RunStatusError:
+		addCheck("hybrid_run:"+runID, false, "warning", "hybrid run failed: "+runID+"; inspect opsc run events "+runID+" and rerun after fixing credential or backend access")
+	}
+	return nil
+}
+
+func doctorRunIsHybrid(root string, data doctorRunData) bool {
+	if doctorHybridMetadataMatches(data.Metadata) {
+		return true
+	}
+	templateID := strings.TrimSpace(data.TemplateID)
+	if templateID == "" {
+		return false
+	}
+	envelope, err := readDoctorEnvelope(filepath.Join(root, "templates", templateID, "template.json"))
+	if err != nil {
+		return false
+	}
+	var template TemplateData
+	if err := json.Unmarshal(envelope.Data, &template); err != nil {
+		return false
+	}
+	return doctorHybridMetadataMatches(template.Metadata) || doctorHybridMetadataMatches(template.Settings)
+}
+
+func doctorHybridMetadataMatches(metadata map[string]any) bool {
+	values, ok := asMapStringAny(metadata[hybridEcommerceKey])
+	if !ok {
+		return false
+	}
+	backend := firstNonEmptyString(stringFromMap(values, "backend"), hybridEcommerceBackend)
+	return backend == hybridEcommerceBackend
+}
+
+func doctorRunHasEvent(root string, runID string, eventType string) bool {
+	events, err := ReadRunEvents(Workspace{Root: root}, runID, 0)
+	if err != nil {
+		return false
+	}
+	for _, event := range events {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
 }
 
 func checkRunArtifactRefFiles(root string, runID string, addCheck doctorAddCheck) error {

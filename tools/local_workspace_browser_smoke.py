@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 from playwright.sync_api import Error as PlaywrightError
@@ -32,14 +33,26 @@ def main() -> int:
     parser.add_argument("--serve-url", default="http://127.0.0.1:17680")
     parser.add_argument("--launch-secret", required=True)
     parser.add_argument("--browser-channel", default="chrome")
+    parser.add_argument("--user-data-dir", default="", help="Optional persistent browser profile directory.")
+    parser.add_argument("--evidence", default="", help="Optional path for JSON evidence output.")
     parser.add_argument("--headed", action="store_true")
     args = parser.parse_args()
 
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(channel=args.browser_channel, headless=not args.headed)
+            browser = None
+            context = None
             try:
-                page = browser.new_page()
+                if args.user_data_dir:
+                    context = playwright.chromium.launch_persistent_context(
+                        user_data_dir=args.user_data_dir,
+                        channel=args.browser_channel,
+                        headless=not args.headed,
+                    )
+                    page = context.new_page()
+                else:
+                    browser = playwright.chromium.launch(channel=args.browser_channel, headless=not args.headed)
+                    page = browser.new_page()
                 page.goto(args.web_url.rstrip("/") + "/workflows/ecommerce", wait_until="domcontentloaded")
                 result = page.evaluate(
                     """async ({ serveUrl, launchSecret, pngBase64 }) => {
@@ -220,13 +233,32 @@ def main() -> int:
                 page.get_by_text("success").first.wait_for(timeout=20000)
                 page.get_by_role("button", name="预览").first.click()
                 page.locator(".ant-modal img").first.wait_for(timeout=15000)
-                print(json.dumps({"ok": True, **result}, ensure_ascii=False))
+                storage = page.evaluate("() => JSON.stringify(window.localStorage)")
+                for forbidden in [args.launch_secret, "Bearer ", "bearer.token", "launch.secret", "tokenFile", "launchSecretFile"]:
+                    if forbidden and forbidden in storage:
+                        raise RuntimeError("browser localStorage contains local runtime or credential material")
+                payload = {"ok": True, **result, "persistentProfile": bool(args.user_data_dir)}
+                write_evidence(args.evidence, payload)
+                print(json.dumps(payload, ensure_ascii=False))
             finally:
-                browser.close()
+                if context:
+                    context.close()
+                if browser:
+                    browser.close()
     except (PlaywrightError, Exception) as exc:
-        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        payload = {"ok": False, "error": str(exc), "persistentProfile": bool(args.user_data_dir)}
+        write_evidence(args.evidence, payload)
+        print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
         return 1
     return 0
+
+
+def write_evidence(path: str, payload: dict[str, Any]) -> None:
+    if not path:
+        return
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

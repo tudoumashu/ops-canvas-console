@@ -158,14 +158,55 @@ func RunExecutorOnce(ctx context.Context, opts ExecutorOptions) (ExecutorResult,
 }
 
 func RunExecutorWatch(ctx context.Context, opts ExecutorWatchOptions) (ExecutorResult, error) {
+	workspace, err := Open(opts.WorkspacePath)
+	if err != nil {
+		return ExecutorResult{}, err
+	}
+	stateDir, err := workspace.StateDir()
+	if err != nil {
+		return ExecutorResult{}, err
+	}
+	if err := ensurePrivateStateDir(stateDir); err != nil {
+		return ExecutorResult{}, err
+	}
+	if err := clearStaleExecutorState(*workspace); err != nil {
+		return ExecutorResult{}, err
+	}
+	lock, err := AcquireLock(workspace.LockPath(executorWatchLock))
+	if err != nil {
+		return ExecutorResult{}, err
+	}
+	defer lock.Release()
+	defer cleanupExecutorRuntimeFiles(*workspace)
+
 	interval := opts.PollInterval
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
+	now := time.Now
+	if opts.Now != nil {
+		now = opts.Now
+	}
+	startedAt := now().UTC().Format(time.RFC3339)
 	aggregate := ExecutorResult{}
 	for iteration := 0; ; iteration++ {
 		if err := ctx.Err(); err != nil {
 			return aggregate, nil
+		}
+		heartbeat := ExecutorRuntimeMetadata{
+			SchemaVersion:      SchemaVersion,
+			PID:                os.Getpid(),
+			WorkspaceID:        workspace.Document.ID,
+			Mode:               "watch",
+			RunID:              strings.TrimSpace(opts.RunID),
+			StartedAt:          startedAt,
+			HeartbeatAt:        now().UTC().Format(time.RFC3339),
+			PollIntervalMillis: int(interval / time.Millisecond),
+			Iteration:          iteration + 1,
+			Processed:          aggregate.Processed,
+		}
+		if err := writeExecutorRuntimeFiles(*workspace, heartbeat); err != nil {
+			return aggregate, err
 		}
 		once := opts.ExecutorOptions
 		once.HybridSingleSync = true
@@ -182,6 +223,17 @@ func RunExecutorWatch(ctx context.Context, opts ExecutorWatchOptions) (ExecutorR
 		aggregate.Processed += result.Processed
 		aggregate.Runs = append(aggregate.Runs, result.Runs...)
 		aggregate.Warnings = append(aggregate.Warnings, result.Warnings...)
+		if len(result.Runs) > 0 {
+			last := result.Runs[len(result.Runs)-1]
+			heartbeat.Processed = aggregate.Processed
+			heartbeat.LastRunID = last.RunID
+			heartbeat.LastRunStatus = last.Status
+			heartbeat.LastError = last.Error
+			heartbeat.HeartbeatAt = now().UTC().Format(time.RFC3339)
+			if err := writeExecutorRuntimeFiles(*workspace, heartbeat); err != nil {
+				return aggregate, err
+			}
+		}
 		if opts.OnResult != nil && (result.Processed > 0 || len(result.Warnings) > 0) {
 			if err := opts.OnResult(result); err != nil {
 				return aggregate, err

@@ -110,10 +110,12 @@ Local Workspace v1 面向个人/本机自用场景，是私有数据的本地事
 
 - `opsc workspace init/info/doctor` 支持初始化、机器可读信息和结构诊断。
 - `opsc serve` 默认监听 `127.0.0.1`，使用 workspace 外 XDG state 保存 runtime metadata、`bearer.token`、一次性 `launch.secret`、HttpOnly session、port/pid 和 lock 文件。
+- `opsc executor --watch` 是正式本地 worker 入口；它使用 workspace 外 executor runtime metadata 和单 worker lock 提供最小健康检查，重启后按 canonical run/node/artifact 状态恢复。
 - Web UI 通过 `opsc serve` 访问本地 profiles、projects、assets、prompts、canvas projects、workbench logs、templates、runs 和 artifacts；浏览器不直接写 `~/OpsCanvas`。
 - 写操作走 workspace core/service、atomic write、lock、revision 检查、path escape 防护和默认脱敏输出。
 - canonical artifact metadata 写在 `artifacts/<art_id>/artifact.json`，run 目录只保存 artifact ref，避免同一产物 metadata 双写漂移。
 - `index.sqlite` 是派生索引，可通过扫描 canonical JSON/JSONL/files 重建。
+- `workspace doctor` 会提示 index 可能过期、executor worker stale、hybrid run 等待/卡住等可操作修复建议，但不会执行 Full GC。
 - `opsc mcp` 是 stdio 薄封装，复用 CLI/core/active `opsc serve`；当前不提供独立 repository、独立 writer 或新的对象 schema。
 - 当前不会迁移旧浏览器测试数据，也不会迁移现有 PDD/VPS run。
 

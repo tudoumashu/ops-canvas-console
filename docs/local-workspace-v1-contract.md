@@ -1042,6 +1042,9 @@ $XDG_STATE_HOME/opsc/workspaces/<workspaceId>-<rootHash>/
   sessions.json
   serve.lock
   workspace.write.lock
+  executor.json
+  executor.pid
+  executor.watch.lock
 ```
 
 `serve.json`：
@@ -1068,6 +1071,7 @@ Runtime file rules：
 - `serve.json`、`serve.pid`、`serve.port` 不得包含 token、launch secret 或 session id 明文。
 - `bearer.token` 可跨 serve 重启复用；`launch.secret` 每次启动生成，成功交换 session 后立即消费。
 - `serve.lock` 防止同一 workspace 重复启动冲突的 serve 实例；`workspace.write.lock` 保护 workspace 写入。
+- `executor.watch.lock` 防止同一 workspace 同时运行多个 `opsc executor --watch` worker；`executor.json`/`executor.pid` 只保存 worker pid、模式、心跳时间、轮询间隔和最近一次处理摘要，不保存 workspace 绝对路径、token、launch secret 或 provider secret。
 - stale pid/lock 只能在确认进程不存在后清理。
 
 Authentication：

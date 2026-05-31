@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="web/public/logo.svg" width="96" alt="infinite-canvas logo">
+  <img src="web/public/logo.svg" width="96" alt="Ops Canvas Console logo">
 </p>
 
-<h1 align="center">无限画布 (infinite-canvas)</h1>
+<h1 align="center">Ops Canvas Console</h1>
 
-无限画布是一款面向图片创作的开源工作台。它把画布编排、AI 图片生成、参考图编辑、对话助手、提示词中心和素材沉淀放在同一个界面里，适合用来探索视觉方案并连续迭代图片结果。
+Ops Canvas Console 是一款面向本地创作、工作流编排和电商内容生成的开源工作台。它把画布编排、AI 图片生成、参考图编辑、对话助手、提示词中心、素材沉淀、local workspace 和 hybrid ecommerce worker 放在同一套控制台里。
 
 > [!CAUTION]
 > 项目目前处于开发阶段，不保证历史数据兼容。各种数据库结构和存储格式都可能直接调整，欢迎关注后续更新，当前更适合个人/本地部署，不建议直接公网多人共用。
@@ -32,11 +32,9 @@
 
 ## 快速开始
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/basketikun/infinite-canvas)
-
 ```bash
-git clone git@github.com:basketikun/infinite-canvas.git
-cd infinite-canvas
+git clone https://github.com/tudoumashu/ops-canvas-console.git
+cd ops-canvas-console
 cp .env.example .env
 # 修改默认账号密码等信息
 docker-compose up -d
@@ -60,13 +58,13 @@ docker compose -f docker-compose.local.yml up -d --build
 ```bash
 go run ./cmd/opsc workspace init --workspace ~/OpsCanvas
 go run ./cmd/opsc serve --workspace ~/OpsCanvas --origin http://localhost:3000
-# 另开一个终端执行本地工作流 run
-go run ./cmd/opsc executor --workspace ~/OpsCanvas
+# 另开一个终端运行本地 worker
+go run ./cmd/opsc executor --workspace ~/OpsCanvas --watch --poll-interval 5s
 ```
 
 `opsc serve` 默认只监听 `127.0.0.1`，runtime metadata、`bearer.token`、一次性 `launch.secret` 和 session 文件写在 workspace 之外的 XDG state 目录。浏览器只保存 loopback `baseUrl`，不保存 token、launch secret 或 workspace 绝对路径，也不直接写 `~/OpsCanvas`。
 
-`opsc executor` 是当前唯一正式的本地工作流执行入口。它会领取 local workspace 中 `run.waiting_for_executor` 的 run，按最小节点集执行固定本地素材、文本生成和图片生成，并把节点状态、事件和产物写回 workspace canonical files。
+`opsc executor` 是当前唯一正式的本地工作流执行入口。`--watch` 模式会持续领取 local workspace 中 `run.waiting_for_executor` 的 run，并把节点状态、事件和产物写回 workspace canonical files；hybrid ecommerce 模板会通过 workspace profile/channel `secretRef` 调用已确认的 VPS PDD API backend，并把远端状态与关键 artifact 同步回本地 canonical objects。
 
 MCP 集成使用 `opsc mcp --workspace <path>`。MCP 只是 CLI/core/`opsc serve` 的薄封装，不是新的事实源；当前主要暴露只读、诊断和通过 active `opsc serve` 重建派生索引的维护能力。
 
@@ -91,6 +89,8 @@ MCP 集成使用 `opsc mcp --workspace <path>`。MCP 只是 CLI/core/`opsc serve
 
 - [功能介绍](docs/features.md)
 - [部署说明](docs/deployment.md)
+- [opsc 本地安装与自启动](docs/opsc-installation.md)
+- [Local Workspace 回归入口](docs/local-workspace-regression.md)
 - [电商工作流](docs/pdd-workflow.md)
 - [画布节点操作手册](docs/canvas-node-manual.md)
 - [画布快捷键](docs/canvas-shortcuts.md)
@@ -114,10 +114,10 @@ MCP 集成使用 `opsc mcp --workspace <path>`。MCP 只是 CLI/core/`opsc serve
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=basketikun%2Finfinite-canvas&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=tudoumashu%2Fops-canvas-console&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=basketikun/infinite-canvas&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=basketikun/infinite-canvas&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=basketikun/infinite-canvas&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=tudoumashu/ops-canvas-console&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=tudoumashu/ops-canvas-console&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=tudoumashu/ops-canvas-console&type=date&legend=top-left" />
  </picture>
 </a>

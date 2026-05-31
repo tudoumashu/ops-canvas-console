@@ -49,6 +49,9 @@ def main() -> int:
     parser.add_argument("--opsc-bin", default="")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument("--browser-channel", default="chrome")
+    parser.add_argument("--user-data-dir", default="", help="Optional persistent browser profile directory.")
+    parser.add_argument("--success-timeout-ms", type=int, default=30000)
+    parser.add_argument("--evidence", default="", help="Optional path for JSON evidence output.")
     parser.add_argument("--headed", action="store_true")
     args = parser.parse_args()
 
@@ -61,9 +64,18 @@ def main() -> int:
 
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(channel=args.browser_channel, headless=not args.headed)
+            browser = None
+            context = None
             try:
-                context = browser.new_context()
+                if args.user_data_dir:
+                    context = playwright.chromium.launch_persistent_context(
+                        user_data_dir=args.user_data_dir,
+                        channel=args.browser_channel,
+                        headless=not args.headed,
+                    )
+                else:
+                    browser = playwright.chromium.launch(channel=args.browser_channel, headless=not args.headed)
+                    context = browser.new_context()
                 page = context.new_page()
                 page.goto(args.web_url.rstrip("/") + "/workflows/ecommerce", wait_until="domcontentloaded")
                 setup = page.evaluate(
@@ -163,19 +175,40 @@ def main() -> int:
                 page.wait_for_url("**/workflows/ecommerce/run_*", wait_until="domcontentloaded", timeout=60000)
                 run_id = page.url.rstrip("/").split("/")[-1]
                 page.get_by_role("heading", name=run_id).wait_for(timeout=15000)
-                page.get_by_text("success").first.wait_for(timeout=30000)
+                page.get_by_text("success").first.wait_for(timeout=args.success_timeout_ms)
                 page.get_by_role("button", name="预览").first.click()
                 page.locator(".ant-modal img").first.wait_for(timeout=15000)
                 storage = page.evaluate("() => JSON.stringify(window.localStorage)")
-                for forbidden in [SECRET_VALUE, SECRET_ENV_NAME, "Bearer "]:
+                for forbidden in [
+                    SECRET_VALUE,
+                    SECRET_ENV_NAME,
+                    args.launch_secret,
+                    "Bearer ",
+                    "bearer.token",
+                    "launch.secret",
+                    "tokenFile",
+                    "launchSecretFile",
+                ]:
                     if forbidden in storage:
                         raise RuntimeError("browser localStorage contains credential material")
-                print(json.dumps({"ok": True, **setup, "runId": run_id, "overviewCalls": state.overview_calls}, ensure_ascii=False))
+                payload = {
+                    "ok": True,
+                    **setup,
+                    "runId": run_id,
+                    "overviewCalls": state.overview_calls,
+                    "persistentProfile": bool(args.user_data_dir),
+                }
+                write_evidence(args.evidence, payload)
+                print(json.dumps(payload, ensure_ascii=False))
             finally:
-                context.close()
-                browser.close()
+                if context:
+                    context.close()
+                if browser:
+                    browser.close()
     except (PlaywrightError, Exception) as exc:
-        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        payload = {"ok": False, "error": str(exc), "persistentProfile": bool(args.user_data_dir)}
+        write_evidence(args.evidence, payload)
+        print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
         return 1
     finally:
         if executor and executor.poll() is None:
@@ -186,6 +219,14 @@ def main() -> int:
                 executor.kill()
         server.shutdown()
     return 0
+
+
+def write_evidence(path: str, payload: dict[str, Any]) -> None:
+    if not path:
+        return
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def make_handler(state: FakeHybridState) -> type[BaseHTTPRequestHandler]:
