@@ -185,7 +185,7 @@ tools/hybrid_ecommerce_browser_smoke.py \
   --launch-secret <launch_secret>
 ```
 
-该 helper 使用 fake VPS API，走真实浏览器、`opsc serve` 和 `opsc executor --watch`，用于验证 Web 创建 hybrid run、状态页轮询、artifact 预览和浏览器持久化不含 credential material；它不会调用真实 VPS 或真实模型账号。
+该 helper 使用 fake VPS API，走真实浏览器、`opsc serve`、模板编辑页“运行模板”和 `opsc executor --watch`，用于验证 Web 创建 hybrid run、状态页轮询、artifact 预览和浏览器持久化不含 credential material；它不会调用真实 VPS 或真实模型账号。
 
 Web UI 本地工作区连接：
 

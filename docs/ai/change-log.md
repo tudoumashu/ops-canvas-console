@@ -3,11 +3,11 @@
 ## 2026-05-31 | Hybrid Ecommerce Web + watch worker golden path | commit: pending
 
 - 目标：把 Phase 11 headless hybrid ecommerce 路径收口到 Web UI + 常驻本地 worker 黄金路径，同时保持 local workspace 为事实源、VPS API 只做执行后端。
-- 变更：`opsc executor` 新增 `--watch` 和 `--poll-interval`，watch 循环短持 workspace lock 领取/同步 run；hybrid 远端非终态同步写入阶段进度 node output/metadata 并去重 resumed event；`run status` node summaries 索引 output/metadata；Web local template 启动 hybrid run 时保留远端映射并要求 profile/channel `secretRef`；本地 run 状态页新增进度列；新增 `tools/hybrid_ecommerce_browser_smoke.py` fake VPS 浏览器 smoke helper。
+- 变更：`opsc executor` 新增 `--watch` 和 `--poll-interval`，watch 循环短持 workspace lock 领取/同步 run；hybrid 远端非终态同步写入阶段进度 node output/metadata 并去重 resumed event；`run status` node summaries 索引 output/metadata；Web local template 启动 hybrid run 时保留远端映射并要求 profile/channel `secretRef`；本地 run 状态页新增进度列；新增 `tools/hybrid_ecommerce_browser_smoke.py` fake VPS 浏览器 smoke helper，并让 helper 从模板编辑页“运行模板”发起 local run。
 - 原因：Web 用户需要从 local workspace 发起已导入的 hybrid 电商模板，并由本机 worker 连续同步远端状态和 artifact；浏览器不能持有或直连 VPS credential。
-- 验证：已用 Docker `golang:1.25-alpine` 执行 `gofmt`；已运行 `go test ./internal/localworkspace ./cmd/opsc`；已运行 `cd web && npx tsc --noEmit`；已运行 `python3 -m py_compile tools/hybrid_ecommerce_browser_smoke.py tools/local_workspace_browser_smoke.py tools/hybrid_ecommerce_vps_smoke.py`。
+- 验证：已用 Docker `golang:1.25-alpine` 执行 `gofmt`；已运行 `go test ./internal/localworkspace ./cmd/opsc`；已运行 `cd web && npx tsc --noEmit`；已运行 `python3 -m py_compile tools/hybrid_ecommerce_browser_smoke.py tools/local_workspace_browser_smoke.py tools/hybrid_ecommerce_vps_smoke.py`；已用临时 workspace、`opsc serve`、Next dev server、Chrome 和 fake VPS 执行 `tools/hybrid_ecommerce_browser_smoke.py` 通过；中央 Wiki 已运行 `lint_wiki.sh`、`reindex_qmd.sh llm-wiki` 和 `qmd embed`。
 - 影响：只扩展 localworkspace executor/watch、hybrid sync、Web local adapter、run 状态页和文档/测试；不改旧云端/后台/PDD 路由语义，不迁移历史 VPS run，不扩大 MCP mutation surface，不新增通用远程模板平台。
-- 风险：真实长期 workspace + 真实 Web UI + 低成本 VPS-backed run 仍需人工执行；watch worker 还未做安装/自启动产品化，`image_edit`/`video_generation` 和更完整 retry/recovery 仍在后续阶段。
+- 风险：真实长期 workspace + 真实 Web UI + 低成本真实 VPS-backed run 仍需人工执行；watch worker 还未做安装/自启动产品化，`image_edit`/`video_generation` 和更完整 retry/recovery 仍在后续阶段。
 - 后续：Phase 13 优先补 worker 安装/自启动文档、真实浏览器长期 workspace 回归、`image_edit`/`video_generation` 和更完整 retry/recovery；不要先迁移旧 VPS run 或扩大 MCP 写面。
 
 ## 2026-05-31 | Hybrid Ecommerce golden path hardening and VPS smoke pass | commit: pending

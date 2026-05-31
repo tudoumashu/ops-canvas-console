@@ -6,9 +6,10 @@ Prerequisites:
 - The Next.js Web UI is already running at `--web-url`.
 - Python Playwright is installed and a Chromium/Chrome browser is available.
 
-The smoke uses a local fake VPS API. The browser creates a workspace profile,
-template and run through `opsc serve`, then a real `opsc executor --watch`
-process dispatches/syncs the fake remote run. No browser credential is used.
+The smoke uses a local fake VPS API. Browser setup creates a workspace profile
+and template through `opsc serve`; the run itself is started from the real Web
+template editor UI, then a real `opsc executor --watch` process dispatches and
+syncs the fake remote run. No browser credential is used.
 """
 
 from __future__ import annotations
@@ -62,9 +63,10 @@ def main() -> int:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(channel=args.browser_channel, headless=not args.headed)
             try:
-                page = browser.new_page()
+                context = browser.new_context()
+                page = context.new_page()
                 page.goto(args.web_url.rstrip("/") + "/workflows/ecommerce", wait_until="domcontentloaded")
-                result = page.evaluate(
+                setup = page.evaluate(
                     """async ({ serveUrl, launchSecret, remoteUrl }) => {
                         const storeKey = "opsc:local_workspace_connection";
                         const api = async (path, init = {}) => {
@@ -136,50 +138,7 @@ def main() -> int:
                                 },
                             }),
                         });
-                        const run = await api("/api/local/runs", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                                data: {
-                                    templateId: template.id,
-                                    status: "pending",
-                                    profileId: profile.id,
-                                    input: { inputs: [{ productTitle: "browser hybrid smoke" }], productConcurrency: 1, maxRetries: 0 },
-                                    metadata: {
-                                        source: "ops-canvas-web",
-                                        workflowType: "pdd",
-                                        templateTitle: template.data.title,
-                                        templateRevision: template.revision,
-                                        executor: "opsc",
-                                        hybridEcommerce: {
-                                            backend: "vps_pdd",
-                                            remoteTemplateId: "remote_tpl",
-                                            profileId: profile.id,
-                                            channelId: "vps",
-                                        },
-                                    },
-                                },
-                            }),
-                        });
-                        await api(`/api/local/runs/${run.id}/nodes/stage_generate`, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ data: { nodeId: "stage_generate", status: "pending", metadata: { title: "Generate", type: "image", operation: "image_generation" } } }),
-                        });
-                        await api(`/api/local/runs/${run.id}/events`, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                                event: {
-                                    type: "run.waiting_for_executor",
-                                    level: "info",
-                                    actor: { type: "web", id: "browser-hybrid-smoke" },
-                                    message: "hybrid browser smoke run created",
-                                    data: { templateId: template.id, workflowType: "pdd" },
-                                },
-                            }),
-                        });
-                        return { runId: run.id, templateId: template.id, profileId: profile.id };
+                        return { templateId: template.id, profileId: profile.id };
                     }""",
                     {"serveUrl": args.serve_url.rstrip("/"), "launchSecret": args.launch_secret, "remoteUrl": remote_url},
                 )
@@ -192,13 +151,18 @@ def main() -> int:
                     "--poll-interval=200ms",
                     "--workspace",
                     args.workspace,
-                    "--run",
-                    result["runId"],
                 ]
                 executor = subprocess.Popen(command, cwd=args.repo_root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-                page.goto(args.web_url.rstrip("/") + f"/workflows/ecommerce/{result['runId']}", wait_until="domcontentloaded")
-                page.get_by_text(result["runId"]).wait_for(timeout=15000)
+                page.goto(args.web_url.rstrip("/") + f"/workflows/ecommerce/templates/{setup['templateId']}", wait_until="domcontentloaded")
+                run_button = page.get_by_role("button", name="运行模板")
+                run_button.wait_for(timeout=15000)
+                run_button.click()
+                page.locator("textarea").fill('{"productTitle":"browser hybrid smoke"}')
+                page.get_by_role("button", name="启动").click()
+                page.wait_for_url("**/workflows/ecommerce/run_*", wait_until="domcontentloaded", timeout=60000)
+                run_id = page.url.rstrip("/").split("/")[-1]
+                page.get_by_role("heading", name=run_id).wait_for(timeout=15000)
                 page.get_by_text("success").first.wait_for(timeout=30000)
                 page.get_by_role("button", name="预览").first.click()
                 page.locator(".ant-modal img").first.wait_for(timeout=15000)
@@ -206,8 +170,9 @@ def main() -> int:
                 for forbidden in [SECRET_VALUE, SECRET_ENV_NAME, "Bearer "]:
                     if forbidden in storage:
                         raise RuntimeError("browser localStorage contains credential material")
-                print(json.dumps({"ok": True, **result, "overviewCalls": state.overview_calls}, ensure_ascii=False))
+                print(json.dumps({"ok": True, **setup, "runId": run_id, "overviewCalls": state.overview_calls}, ensure_ascii=False))
             finally:
+                context.close()
                 browser.close()
     except (PlaywrightError, Exception) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
