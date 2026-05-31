@@ -32,13 +32,55 @@ Coverage:
 
 ## Manual Status
 
-Status: PENDING
+Status: PASS
 
-Not run in this pass:
+Real smoke completed:
 
-- Real browser Web UI flow with a real long-lived workspace.
-- Real local material library at the user machine default `anime_ip` path.
-- Real OpenAI-compatible image-edit provider account.
-- Real project output directory inspection and artifact preview after a Web-started run.
+- Web UI started a local-first ecommerce run from the imported template.
+- `opsc executor --watch` claimed the run and executed it to `success`.
+- The run used the default local `anime_ip` material library and matched `药屋少女的呢喃 / 猫猫`.
+- Real image-edit requests went through the workspace profile/channel `secretRef` path.
+- The run wrote 7 canonical artifacts: image artifacts plus text package/sync marker artifacts.
+- Project output mapping wrote 5 files under the project-relative ecommerce output directory.
+- The browser run page opened an artifact preview modal successfully.
+- Browser persistent storage check did not find model/VPS secret material, bearer token, launch secret, or secret file content.
+- Run events stayed local-first: no `remote.run.dispatched` or hybrid remote event was emitted.
 
-These remain Phase 14 manual checks and are listed in `docs/pending-test.md`.
+Smoke command shape:
+
+```bash
+python3 tools/local_ecommerce_browser_smoke.py \
+  --workspace <isolated-workspace> \
+  --web-url http://127.0.0.1:3000 \
+  --serve-url http://127.0.0.1:<loopback-port> \
+  --launch-secret <one-time-secret> \
+  --opsc-bin ./.tmp/opsc.phase14 \
+  --template-id <local-template-id> \
+  --project-root <isolated-project-root> \
+  --forbidden-secret-file <local-secret-file> \
+  --input-json '{"productTitle":"猫猫抱枕","theme":"药屋少女的呢喃","work":"药屋少女的呢喃","animeIP":"药屋少女的呢喃","character":"猫猫"}' \
+  --evidence <redacted-evidence-json>
+```
+
+Result summary:
+
+```json
+{
+  "status": "success",
+  "artifactCount": 7,
+  "artifactTypes": ["image", "text"],
+  "nodeStatuses": {
+    "input": "success",
+    "reference": "success",
+    "mockup_base": "success",
+    "source": "success",
+    "mockup": "success",
+    "main": "success",
+    "package": "success",
+    "sync_local": "success"
+  },
+  "projectOutputFiles": 5
+}
+```
+
+Remaining follow-up is no longer a Phase 14 blocker: repeat the same flow in the user's real long-lived personal workspace and any future packaged/systemd startup environment.

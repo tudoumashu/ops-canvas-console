@@ -836,7 +836,7 @@ func executorLocalMaterialLibraryPath(execCtx executorContext, node executorNode
 		return pathValue
 	}
 	if config, ok := localEcommerceConfigFromTemplate(execCtx.template); ok {
-		return config.MaterialLibraryPath
+		return firstNonEmptyString(config.MaterialLibraryPath, defaultAnimeIPMaterialLibrary)
 	}
 	return defaultAnimeIPMaterialLibrary
 }
@@ -966,7 +966,7 @@ func executeTextGeneration(ctx context.Context, execCtx executorContext, node ex
 			"content": prompt,
 		}},
 	}
-	body, err := postLocalAIJSON(ctx, execCtx.workspace, execCtx.run.Data.ProfileID, "", execCtx.client, "/ai/v1/chat/completions", payload)
+	body, err := postLocalAIJSON(ctx, execCtx.workspace, execCtx.run.Data.ProfileID, executorAIChannelID(execCtx), execCtx.client, "/ai/v1/chat/completions", payload)
 	if err != nil {
 		return nil, err
 	}
@@ -1017,7 +1017,7 @@ func executeImageGeneration(ctx context.Context, execCtx executorContext, node e
 	if strings.TrimSpace(node.Quality) != "" {
 		payload["quality"] = strings.TrimSpace(node.Quality)
 	}
-	body, err := postLocalAIJSON(ctx, execCtx.workspace, execCtx.run.Data.ProfileID, "", execCtx.client, "/ai/v1/images/generations", payload)
+	body, err := postLocalAIJSON(ctx, execCtx.workspace, execCtx.run.Data.ProfileID, executorAIChannelID(execCtx), execCtx.client, "/ai/v1/images/generations", payload)
 	if err != nil {
 		return nil, err
 	}
@@ -1076,7 +1076,7 @@ func executeImageEdit(ctx context.Context, execCtx executorContext, node executo
 	if strings.TrimSpace(node.Quality) != "" {
 		fields["quality"] = strings.TrimSpace(node.Quality)
 	}
-	body, err := postLocalAIMultipart(ctx, execCtx.workspace, execCtx.run.Data.ProfileID, "", execCtx.client, "/ai/v1/images/edits", fields, refs)
+	body, err := postLocalAIMultipart(ctx, execCtx.workspace, execCtx.run.Data.ProfileID, executorAIChannelID(execCtx), execCtx.client, "/ai/v1/images/edits", fields, refs)
 	if err != nil {
 		return nil, err
 	}
@@ -1111,6 +1111,27 @@ func executeImageEdit(ctx context.Context, execCtx executorContext, node executo
 		output["first_file"] = "artifact:" + artifactIDs[0]
 	}
 	return applyProjectOutputMappings(execCtx, node, output, files)
+}
+
+func executorAIChannelID(execCtx executorContext) string {
+	if execCtx.run.Data.Metadata != nil {
+		for _, key := range []string{localEcommerceKey, hybridEcommerceKey} {
+			values, ok := asMapStringAny(execCtx.run.Data.Metadata[key])
+			if !ok {
+				continue
+			}
+			if channelID := stringFromMap(values, "channelId"); channelID != "" {
+				return channelID
+			}
+		}
+	}
+	if config, ok := localEcommerceConfigFromTemplate(execCtx.template); ok {
+		return config.ChannelID
+	}
+	if config, ok, err := hybridEcommerceConfigFromTemplate(execCtx.template); err == nil && ok {
+		return config.ChannelID
+	}
+	return ""
 }
 
 type executorImageInputRef struct {

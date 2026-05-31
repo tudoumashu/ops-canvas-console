@@ -3,12 +3,12 @@
 ## 2026-05-31 | Local-first ecommerce executor path | commit: pending
 
 - 目标：在保留 hybrid VPS-backed fallback 的前提下，把已确认电商模板补成可本地执行的 local-first 黄金路径。
-- 变更：新增 `opsc ecommerce import-template --local-executable`，把已确认远端模板重建为 `localEcommerce.backend=local_first` 的本地 template；`opsc ecommerce create-run` 会按 template metadata 自动选择 hybrid 或 local-first；executor 新增本地 `image_edit`、自动 `anime_ip` 素材匹配、内置 mockup 底版 fallback、local ecommerce `package` 和 `sync_local` project action；Web local template adapter 会为本地电商模板写入 local ecommerce metadata，并保留 hybrid template 的远端映射。
+- 变更：新增 `opsc ecommerce import-template --local-executable`，把已确认远端模板重建为 `localEcommerce.backend=local_first` 的本地 template；`opsc ecommerce create-run` 会按 template metadata 自动选择 hybrid 或 local-first，并可从 template settings 继承默认 `projectId`；executor 新增本地 `image_edit`、自动 `anime_ip` 素材匹配、内置 mockup 底版 fallback、local ecommerce `package` 和 `sync_local` project action，并按 template/run metadata 选择 profile channel；Web local template adapter 会为本地电商模板写入 local ecommerce metadata，并保留 hybrid template 的远端映射。
 - 原因：用户希望电商自用链路逐步摆脱 VPS run 目录事实源，先让已确认模板能读取本地素材库、调用本地 profile `secretRef` 模型渠道，并把包产物写入本地项目目录。
-- 验证：已用 Docker `golang:1.25-alpine` 执行 `gofmt`；`GOPROXY=https://goproxy.cn,direct go test ./internal/localworkspace ./cmd/opsc` 通过；`cd web && npx tsc --noEmit` 通过。
+- 验证：已用 Docker `golang:1.25-alpine` 执行 `gofmt`；`GOPROXY=https://goproxy.cn,direct go test ./internal/localworkspace ./cmd/opsc` 通过；`cd web && npx tsc --noEmit` 通过；真实浏览器 smoke 已用隔离 workspace、真实本地 `anime_ip` 素材库、真实 profile/channel `secretRef` 模型通道和 project output 目录跑通，Web UI 启动 run 后 `opsc executor --watch` 推进到 `success`，写入 7 个 canonical artifact 和 5 个项目输出文件。
 - 影响：只扩展 local workspace ecommerce core、executor、CLI、Web local template adapter、测试和文档；不迁移历史 PDD/VPS run，不扩大 MCP 写面，不新增 canonical object 类型。
-- 风险：真实长期 workspace、真实浏览器、真实 `anime_ip` 素材库路径、真实 image-edit provider 和真实 project output 目录尚未做人工回归；默认本机素材库路径仍是自用约定，发布前需进一步产品化配置。
-- 后续：优先用真实浏览器跑 local-first ecommerce Web run；再补 `video_generation`、更完整失败恢复、通用素材匹配配置和安装分发。
+- 风险：真实长期个人 workspace 和未来 systemd/安装态 worker 自启动仍需重复回归；默认本机素材库路径仍是自用约定，发布前需进一步产品化配置。
+- 后续：优先补 `video_generation`、更完整失败恢复、通用素材匹配配置、真实长期 workspace 回归和安装分发。
 
 ## 2026-05-31 | Phase 13 operational hardening | commit: pending
 

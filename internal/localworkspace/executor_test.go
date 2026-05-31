@@ -154,6 +154,7 @@ func TestRunExecutorOnceExecutesFixedMaterialTextAndImage(t *testing.T) {
 
 func TestRunExecutorOnceExecutesLocalEcommerceTemplate(t *testing.T) {
 	t.Setenv("OPSC_EXECUTOR_TEST_KEY", "provider-secret")
+	t.Setenv("OPSC_EXECUTOR_WRONG_KEY", "wrong-provider-secret")
 	root := filepath.Join(t.TempDir(), "workspace")
 	workspace, profileID, _ := seedExecutorWorkspace(t, root)
 	projectRoot := filepath.Join(t.TempDir(), "project")
@@ -199,7 +200,22 @@ func TestRunExecutorOnceExecutesLocalEcommerceTemplate(t *testing.T) {
 	defer provider.Close()
 
 	profile := readExecutorProfile(t, workspace, profileID)
-	profile.Data.Channels[0].BaseURL = provider.URL
+	profile.Data.Channels = []ProfileChannel{
+		{
+			ID:        "wrong",
+			Protocol:  "openai-compatible",
+			BaseURL:   "http://127.0.0.1:1",
+			Enabled:   true,
+			SecretRef: &SecretRef{Type: SecretRefTypeEnv, Name: "OPSC_EXECUTOR_WRONG_KEY"},
+		},
+		{
+			ID:        "edits",
+			Protocol:  "openai-compatible",
+			BaseURL:   provider.URL,
+			Enabled:   true,
+			SecretRef: &SecretRef{Type: SecretRefTypeEnv, Name: "OPSC_EXECUTOR_TEST_KEY"},
+		},
+	}
 	if err := WriteProfile(workspace, profile); err != nil {
 		t.Fatalf("WriteProfile() error = %v", err)
 	}
@@ -225,7 +241,7 @@ func TestRunExecutorOnceExecutesLocalEcommerceTemplate(t *testing.T) {
 		{"source": "main", "target": "package"},
 		{"source": "package", "target": "sync_local"},
 	})
-	template.Data.Metadata = map[string]any{localEcommerceKey: map[string]any{"backend": localEcommerceBackend, "materialLibraryPath": materialRoot, "projectOutputRoot": defaultEcommerceProjectOutRoot}}
+	template.Data.Metadata = map[string]any{localEcommerceKey: map[string]any{"backend": localEcommerceBackend, "channelId": "edits", "materialLibraryPath": materialRoot, "projectOutputRoot": defaultEcommerceProjectOutRoot}}
 	if err := WriteTemplate(workspace, nextEnvelopeRevision(template, template.Data)); err != nil {
 		t.Fatalf("WriteTemplate(local ecommerce metadata) error = %v", err)
 	}
@@ -282,6 +298,20 @@ func TestRunExecutorOnceExecutesLocalEcommerceTemplate(t *testing.T) {
 	}
 	if second.Processed != 0 {
 		t.Fatalf("second executor result = %#v, want no duplicate local ecommerce work", second)
+	}
+}
+
+func TestLocalEcommerceMaterialLookupDefaultsToAnimeIPLibrary(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspace")
+	workspace, _, _ := seedExecutorWorkspace(t, root)
+	template := writeExecutorTemplate(t, workspace, []map[string]any{
+		{"id": "reference", "type": "material_lookup", "operation": "material_lookup", "title": "Reference", "extra": map[string]any{"assetMode": "auto", "materialLibrary": localEcommerceMaterialLibrary}},
+	}, nil)
+	template.Data.Metadata = map[string]any{localEcommerceKey: map[string]any{"backend": localEcommerceBackend, "projectOutputRoot": defaultEcommerceProjectOutRoot}}
+	node := executorNode{ID: "reference", Operation: "material_lookup", Extra: map[string]any{"assetMode": "auto", "materialLibrary": localEcommerceMaterialLibrary}}
+	got := executorLocalMaterialLibraryPath(executorContext{workspace: workspace, template: template}, node)
+	if got != defaultAnimeIPMaterialLibrary {
+		t.Fatalf("material library path = %q, want default anime_ip path", got)
 	}
 }
 

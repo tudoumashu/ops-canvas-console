@@ -22,6 +22,7 @@ type LocalEcommerceImportOptions struct {
 	RemoteTemplateID    string
 	ProfileID           string
 	ChannelID           string
+	ProjectID           string
 	SecretEnv           string
 	MaterialLibraryPath string
 	HTTPClient          *http.Client
@@ -33,6 +34,7 @@ type LocalEcommerceImportResult struct {
 	RemoteTemplateID string                    `json:"remoteTemplateId"`
 	ProfileID        string                    `json:"profileId,omitempty"`
 	ChannelID        string                    `json:"channelId,omitempty"`
+	ProjectID        string                    `json:"projectId,omitempty"`
 	Mode             string                    `json:"mode"`
 	Warnings         []string                  `json:"warnings,omitempty"`
 	SecretRef        *SecretRefSummary         `json:"secretRef,omitempty"`
@@ -71,6 +73,7 @@ func ImportLocalEcommerceTemplate(ctx context.Context, opts LocalEcommerceImport
 		RemoteTemplateID: remote.ID,
 		ProfileID:        strings.TrimSpace(opts.ProfileID),
 		ChannelID:        strings.TrimSpace(opts.ChannelID),
+		ProjectID:        strings.TrimSpace(opts.ProjectID),
 		Mode:             localEcommerceBackend,
 		Remote: hybridRemoteTemplateBrief{
 			ID:        remote.ID,
@@ -99,6 +102,9 @@ func upsertLocalEcommerceTemplate(workspace Workspace, remote hybridPDDTemplate,
 	if strings.TrimSpace(opts.ProfileID) != "" {
 		settings["defaultProfileId"] = strings.TrimSpace(opts.ProfileID)
 	}
+	if strings.TrimSpace(opts.ProjectID) != "" {
+		settings["defaultProjectId"] = strings.TrimSpace(opts.ProjectID)
+	}
 	nodes, err := localizeEcommerceTemplateNodes(remote.Spec.Nodes, strings.TrimSpace(opts.MaterialLibraryPath))
 	if err != nil {
 		return Envelope[TemplateData]{}, false, err
@@ -115,6 +121,7 @@ func upsertLocalEcommerceTemplate(workspace Workspace, remote hybridPDDTemplate,
 			"sourceFingerprint":      hybridRemoteTemplateFingerprint(remote),
 			"profileId":              strings.TrimSpace(opts.ProfileID),
 			"channelId":              strings.TrimSpace(opts.ChannelID),
+			"projectId":              strings.TrimSpace(opts.ProjectID),
 			"materialLibrary":        localEcommerceMaterialLibrary,
 			"projectOutputRoot":      defaultEcommerceProjectOutRoot,
 		},
@@ -291,11 +298,12 @@ func createLocalEcommerceRun(workspace Workspace, template Envelope[TemplateData
 	}
 	profileID := firstNonEmptyString(strings.TrimSpace(opts.ProfileID), config.ProfileID, stringFromMap(template.Data.Settings, "defaultProfileId"), stringFromMap(template.Data.Settings, "profileId"))
 	channelID := firstNonEmptyString(strings.TrimSpace(opts.ChannelID), config.ChannelID)
+	projectID := firstNonEmptyString(strings.TrimSpace(opts.ProjectID), stringFromMap(template.Data.Settings, "defaultProjectId"), stringFromMap(template.Data.Settings, "projectId"))
 	run, err := NewRun(workspace, RunData{
 		TemplateID: template.ID,
 		Status:     RunStatusPending,
 		ProfileID:  profileID,
-		ProjectID:  strings.TrimSpace(opts.ProjectID),
+		ProjectID:  projectID,
 		Input:      runInput,
 		Metadata: map[string]any{
 			"source":           "opsc_ecommerce_cli",
@@ -308,6 +316,7 @@ func createLocalEcommerceRun(workspace Workspace, template Envelope[TemplateData
 				"sourceRemoteTemplateId": config.SourceRemoteTemplateID,
 				"profileId":              profileID,
 				"channelId":              channelID,
+				"projectId":              projectID,
 				"projectOutputRoot":      firstNonEmptyString(config.ProjectOutputRoot, defaultEcommerceProjectOutRoot),
 			},
 		},
@@ -343,7 +352,7 @@ func createLocalEcommerceRun(workspace Workspace, template Envelope[TemplateData
 		TemplateID: template.ID,
 		ProfileID:  profileID,
 		ChannelID:  channelID,
-		ProjectID:  strings.TrimSpace(opts.ProjectID),
+		ProjectID:  projectID,
 		Mode:       localEcommerceBackend,
 	}, nil
 }

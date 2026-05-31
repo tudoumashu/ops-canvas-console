@@ -220,6 +220,7 @@ func runEcommerceImportTemplate(ctx context.Context, opts cliOptions, stdout io.
 			RemoteTemplateID:    opts.RemoteTemplateID,
 			ProfileID:           opts.ProfileID,
 			ChannelID:           opts.ChannelID,
+			ProjectID:           opts.ProjectID,
 			SecretEnv:           opts.SecretEnv,
 			MaterialLibraryPath: opts.MaterialLibrary,
 		})
