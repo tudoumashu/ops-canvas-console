@@ -26,11 +26,18 @@
 - `tools/hybrid_ecommerce_browser_smoke.py` 支持 `--user-data-dir`、`--success-timeout-ms` 和 `--evidence`，用于 fake VPS + 真实 Web UI + `opsc executor --watch` 回归。
 - `tools/hybrid_ecommerce_vps_smoke.py` 保持真实 VPS headless smoke 入口，真实 secret 通过环境变量读取，不写入 evidence。
 
+## 本轮半自动验收
+
+- PASS：当前机器未发现已有 `~/OpsCanvas` 或其它 `opsc-workspace.json`，因此无法直接验证用户历史长期 workspace 数据。本轮改用隔离的非 `/tmp` 长期回归 workspace 和非临时浏览器 profile 执行 smoke，避免污染个人数据。
+- PASS：`tools/local_workspace_browser_smoke.py` 使用非临时 browser profile 通过，evidence 写入 `~/.local/share/opsc-phase13-regression/local-browser-smoke.json`；结果包含 `ok=true`、`persistentProfile=true`，并完成 local template/run/artifact 创建、run 状态页回显和 artifact 预览。
+- PASS：`tools/hybrid_ecommerce_browser_smoke.py` 使用非临时 browser profile、fake VPS API 和真实 `opsc executor --watch` 通过，evidence 写入 `~/.local/share/opsc-phase13-regression/hybrid-browser-smoke.json`；结果包含 `ok=true`、`persistentProfile=true`、`overviewCalls=2`，并完成 Web UI 发起 run、worker dispatch/sync、run success 和 artifact 预览。
+- PASS：上述回归 workspace 的 `workspace doctor` 报告 `errors=0`、`warnings=0`，并确认已写入 2 个 templates、2 个 runs、2 个 artifacts 和 1 个 profile。浏览器 smoke 已检查 `localStorage` 未保存 launch secret、bearer token、runtime token 文件名或 hybrid fake credential。
+
 ## 本轮未执行的人工项
 
-- BLOCKED：未在用户真实长期 `~/OpsCanvas` 和用户日常浏览器 profile 上执行 smoke，以避免在未知个人数据目录中写入测试模板/run/artifact。已提供可重复命令和 evidence 输出路径，后续由用户选择真实 workspace/profile 后执行。
+- BLOCKED：当前机器未发现用户真实长期 workspace，因此未能在真实历史模板/run/artifact 数据上执行 smoke。已提供可重复命令和 evidence 输出路径；后续用户指定真实 workspace/profile 后，可直接按 `docs/local-workspace-regression.md` 重跑并对比 evidence。
 - BLOCKED：未实际安装 `systemd --user` service；已在 `docs/opsc-installation.md` 提供 unit 示例和排查命令，仍需在目标机器上人工确认自启动与日志。
 
 ## 结论
 
-Phase 13 的代码级 hardening、文档化安装路径和可复用 smoke 入口已完成。剩余风险集中在真实长期个人 workspace、非临时浏览器 profile 和真实自启动环境的人工确认。
+Phase 13 的代码级 hardening、文档化安装路径和可复用 smoke 入口已完成；本轮还用非临时浏览器 profile 和隔离长期回归 workspace 验证了 local workspace UI 与 hybrid Web + `opsc executor --watch` 黄金路径。剩余风险集中在用户真实历史 workspace 和真实自启动环境的人工确认。

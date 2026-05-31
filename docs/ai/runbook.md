@@ -142,6 +142,12 @@ go run ./cmd/opsc mcp --workspace ~/OpsCanvas
 
 `opsc` 本地安装、Linux `systemd --user` 自启动和 smoke helper 回归入口见 `docs/opsc-installation.md` 与 `docs/local-workspace-regression.md`。
 
+Phase 13 本机回归已在隔离长期 workspace 和非临时浏览器 profile 上跑通：
+
+- `tools/local_workspace_browser_smoke.py`：local template/run/artifact、run 状态页和 artifact 预览通过；
+- `tools/hybrid_ecommerce_browser_smoke.py`：fake VPS、Web UI 发起 run、`opsc executor --watch` dispatch/sync 和 artifact 预览通过；
+- 当前机器未发现用户真实长期 workspace，真实历史数据回归需用户指定 workspace/profile 后按 `docs/local-workspace-regression.md` 重跑。
+
 Hybrid ecommerce VPS smoke。当前已确认 VPS `96.9.225.98` 的应用 API 在 VPS 本机 `127.0.0.1:18080`，从本机测试时先建立 SSH tunnel：
 
 ```bash
