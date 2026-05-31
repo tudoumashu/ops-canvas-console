@@ -19,15 +19,21 @@ Phase 12 收口 Hybrid Ecommerce Web + worker 黄金路径：local workspace 继
 
 ## Real VPS Status
 
-Phase 11 已完成 headless 真实 VPS smoke，证据见 `docs/manual-test-report-phase11.md`。Phase 12 本轮没有再次发起真实 VPS run，避免重复消耗远端模型资源；本轮改动通过 fake upstream 和自动化覆盖 Web/worker 路径。
+Phase 11 已完成 headless 真实 VPS smoke，证据见 `docs/manual-test-report-phase11.md`。Phase 12 又使用同一条已确认 remote template/API 黄金路径做了一次真实 Web UI + `opsc executor --watch` smoke：
+
+- 本地临时 workspace 通过 `opsc serve` 建立 browser bootstrap session。
+- Web UI 打开已导入的 hybrid ecommerce local template，在模板编辑页点击“运行模板”创建 local run。
+- `opsc executor --watch --poll-interval=5s` 通过 workspace profile/channel `secretRef` 调用 VPS API，浏览器没有接触 VPS token/cookie/secret。
+- 远端 run 同步到 local run `success`，本地 node state 记录阶段进度，关键 artifact 导入 canonical artifacts 并写入 run artifact refs。
+- 本地 run 状态页刷新后显示 `success`，artifact preview modal 可打开；浏览器 `localStorage` 检查未发现 VPS token、bearer token、launch secret、runtime token 文件名或 configured secret env name。
+
+结果：PASS。为避免在仓库文档中固化远端模板 ID、VPS 细节或凭证材料，本节只记录脱敏结论；临时 evidence 保留在本机 smoke 工作目录，不作为仓库事实源。
 
 ## Remaining Manual Checklist
 
-- 使用真实长期 workspace 启动 `opsc serve`，在 Web UI 建立 bootstrap session。
-- 使用 profile/channel `secretRef` 导入或打开已确认 hybrid template，并从 Web UI 发起一条低成本 VPS-backed run。
-- 启动 `opsc executor --workspace <workspace> --watch --poll-interval 5s`，确认 run 状态页从 pending/running 进入 success 或 error。
-- 确认状态页阶段进度、events、artifact 预览、刷新回显正常。
-- 确认浏览器持久化状态不包含 VPS token、cookie、launch secret、bearer token 或 workspace/project 绝对路径。
+- 真实长期个人 workspace 下重复一条低成本 hybrid run，确认长期 workspace 中的历史本地数据不会影响 template/run/artifact 回显。
+- 在非临时浏览器 profile 中 spot check local workspace 连接状态、刷新回显和 `localStorage` 脱敏。
+- 后续 worker 安装/自启动产品化完成后，再验证系统重启后的 watch worker 恢复行为。
 
 ## Non-goals
 
