@@ -64,6 +64,8 @@ go run ./cmd/opsc executor --workspace ~/OpsCanvas --watch --poll-interval 5s
 
 `opsc serve` 默认只监听 `127.0.0.1`，runtime metadata、`bearer.token`、一次性 `launch.secret` 和 session 文件写在 workspace 之外的 XDG state 目录。浏览器只保存 loopback `baseUrl`，不保存 token、launch secret 或 workspace 绝对路径，也不直接写 `~/OpsCanvas`。
 
+已确认电商模板可导入为本地执行模板：使用 `opsc ecommerce import-template --local-executable --material-library <local_anime_ip_library>` 写入 `metadata.localEcommerce.backend=local_first`，再由 Web UI 发起本地 run，`opsc executor --watch` 在本机完成素材匹配、模板内图片编辑编排、项目相对打包和 `sync_local` marker。除模型/图片 API 请求外，这条路径不再通过 VPS workflow backend 编排；素材库路径也可由 executor 环境变量 `OPSC_LOCAL_ECOMMERCE_MATERIAL_LIBRARY` 提供。
+
 `opsc executor` 是当前唯一正式的本地工作流执行入口。`--watch` 模式会持续领取 local workspace 中 `run.waiting_for_executor` 的 run，并把节点状态、事件和产物写回 workspace canonical files；hybrid ecommerce 模板会通过 workspace profile/channel `secretRef` 调用已确认的 VPS PDD API backend，并把远端状态与关键 artifact 同步回本地 canonical objects。
 
 MCP 集成使用 `opsc mcp --workspace <path>`。MCP 只是 CLI/core/`opsc serve` 的薄封装，不是新的事实源；当前主要暴露只读、诊断和通过 active `opsc serve` 重建派生索引的维护能力。

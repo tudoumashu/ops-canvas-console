@@ -1,5 +1,13 @@
 # AI 项目记忆变更记录
 
+## 2026-05-31 | Local ecommerce material path hardening | commit: pending
+
+- 目标：收口已确认电商模板 local-first 路径，避免代码里固化个人机器的 `anime_ip` 素材库绝对路径。
+- 变更：`material_lookup` 自动素材库路径解析改为优先读取节点/template metadata 的 `materialLibraryPath`，其次读取 executor runtime env `OPSC_LOCAL_ECOMMERCE_MATERIAL_LIBRARY`；补充本地化路径不写入 VPS/hybrid run orchestration event 的回归断言；同步 contract、README、安装文档、features、todo、pending-test 和 Phase 14 手工报告。
+- 原因：本地 workspace 需要支持用户自己的素材库/项目根目录，路径只能作为本机 runtime 配置，不能成为代码默认值或 artifact source。
+- 验证：已用 Docker `golang:1.25-alpine` 执行 `gofmt`；已运行 `GOPROXY=https://goproxy.cn,direct go test ./internal/localworkspace ./cmd/opsc`；`git diff --check` 通过。
+- 影响：不改变 Web UI 路由、旧 DB/VPS 行为、hybrid fallback 或 MCP 写面。
+
 ## 2026-05-31 | Local-first ecommerce executor path | commit: pending
 
 - 目标：在保留 hybrid VPS-backed fallback 的前提下，把已确认电商模板补成可本地执行的 local-first 黄金路径。
@@ -7,7 +15,7 @@
 - 原因：用户希望电商自用链路逐步摆脱 VPS run 目录事实源，先让已确认模板能读取本地素材库、调用本地 profile `secretRef` 模型渠道，并把包产物写入本地项目目录。
 - 验证：已用 Docker `golang:1.25-alpine` 执行 `gofmt`；`GOPROXY=https://goproxy.cn,direct go test ./internal/localworkspace ./cmd/opsc` 通过；`cd web && npx tsc --noEmit` 通过；真实浏览器 smoke 已用隔离 workspace、真实本地 `anime_ip` 素材库、真实 profile/channel `secretRef` 模型通道和 project output 目录跑通，Web UI 启动 run 后 `opsc executor --watch` 推进到 `success`，写入 7 个 canonical artifact 和 5 个项目输出文件。
 - 影响：只扩展 local workspace ecommerce core、executor、CLI、Web local template adapter、测试和文档；不迁移历史 PDD/VPS run，不扩大 MCP 写面，不新增 canonical object 类型。
-- 风险：真实长期个人 workspace 和未来 systemd/安装态 worker 自启动仍需重复回归；默认本机素材库路径仍是自用约定，发布前需进一步产品化配置。
+- 风险：真实长期个人 workspace 和未来 systemd/安装态 worker 自启动仍需重复回归；素材库路径已配置化，但后续仍需要做可视化配置和人工确认 UI。
 - 后续：优先补 `video_generation`、更完整失败恢复、通用素材匹配配置、真实长期 workspace 回归和安装分发。
 
 ## 2026-05-31 | Phase 13 operational hardening | commit: pending

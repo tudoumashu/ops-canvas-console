@@ -63,6 +63,8 @@ After=opsc-serve.service
 [Service]
 Type=simple
 Environment=OPSC_WORKSPACE=%h/OpsCanvas
+# 可选：local-first 电商模板未在导入 metadata 中写入素材库路径时，用该环境变量提供本机 anime_ip 素材库。
+# Environment=OPSC_LOCAL_ECOMMERCE_MATERIAL_LIBRARY=<local_anime_ip_library>
 # 如 hybrid backend credential 使用 env secretRef，可放到仅当前用户可读的 env file。
 # EnvironmentFile=%h/.config/opsc/hybrid.env
 ExecStart=%h/.local/bin/opsc executor --workspace %h/OpsCanvas --watch --poll-interval 5s

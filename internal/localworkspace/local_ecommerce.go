@@ -8,12 +8,12 @@ import (
 )
 
 const (
-	localEcommerceKey              = "localEcommerce"
-	localEcommerceBackend          = "local_first"
-	localEcommerceVersion          = 1
-	localEcommerceMaterialLibrary  = "anime_ip"
-	defaultAnimeIPMaterialLibrary  = "/home/shiyi/Apps/VScode/auto-workflow/pdd/materials/reference_library/anime_ip"
-	defaultEcommerceProjectOutRoot = "outputs/ecommerce"
+	localEcommerceKey                = "localEcommerce"
+	localEcommerceBackend            = "local_first"
+	localEcommerceVersion            = 1
+	localEcommerceMaterialLibrary    = "anime_ip"
+	localEcommerceMaterialLibraryEnv = "OPSC_LOCAL_ECOMMERCE_MATERIAL_LIBRARY"
+	defaultEcommerceProjectOutRoot   = "outputs/ecommerce"
 )
 
 type LocalEcommerceImportOptions struct {

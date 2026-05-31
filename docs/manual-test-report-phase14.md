@@ -25,9 +25,10 @@ Coverage:
 
 - CLI local-executable template import and local ecommerce run creation.
 - Confirmed-template executor happy path with fake image-edit provider.
-- Auto material lookup from a local `anime_ip` style library fixture.
+- Auto material lookup from a configured local `anime_ip` style library fixture; fixture tests now cover the `OPSC_LOCAL_ECOMMERCE_MATERIAL_LIBRARY` fallback instead of a hardcoded machine path.
 - Built-in mockup base fallback when the browser did not pre-materialize the server asset.
 - Canonical artifact writes, run artifact refs, node states, event order, project output files and idempotent rerun.
+- Local-first event assertion that this path does not emit VPS/hybrid run orchestration events.
 - Secret/root path redaction checks in the new local ecommerce executor path.
 
 ## Manual Status
@@ -38,7 +39,7 @@ Real smoke completed:
 
 - Web UI started a local-first ecommerce run from the imported template.
 - `opsc executor --watch` claimed the run and executed it to `success`.
-- The run used the default local `anime_ip` material library and matched `药屋少女的呢喃 / 猫猫`.
+- The run used the configured local `anime_ip` material library and matched `药屋少女的呢喃 / 猫猫`.
 - Real image-edit requests went through the workspace profile/channel `secretRef` path.
 - The run wrote 7 canonical artifacts: image artifacts plus text package/sync marker artifacts.
 - Project output mapping wrote 5 files under the project-relative ecommerce output directory.

@@ -286,6 +286,12 @@ func TestRunExecutorOnceExecutesLocalEcommerceTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadRunEvents() error = %v", err)
 	}
+	for _, event := range events {
+		switch event.Type {
+		case hybridRemoteRunStarted, hybridRemoteRunSynced, hybridRemoteRunCompleted, hybridRemoteRunFailed, "remote.run.dispatched":
+			t.Fatalf("local ecommerce emitted remote orchestration event %q", event.Type)
+		}
+	}
 	refs, err := ListRunArtifacts(workspace, run.ID)
 	if err != nil {
 		t.Fatalf("ListRunArtifacts() error = %v", err)
@@ -301,8 +307,10 @@ func TestRunExecutorOnceExecutesLocalEcommerceTemplate(t *testing.T) {
 	}
 }
 
-func TestLocalEcommerceMaterialLookupDefaultsToAnimeIPLibrary(t *testing.T) {
+func TestLocalEcommerceMaterialLookupUsesEnvLibraryFallback(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "workspace")
+	materialRoot := filepath.Join(t.TempDir(), "anime_ip")
+	t.Setenv(localEcommerceMaterialLibraryEnv, materialRoot)
 	workspace, _, _ := seedExecutorWorkspace(t, root)
 	template := writeExecutorTemplate(t, workspace, []map[string]any{
 		{"id": "reference", "type": "material_lookup", "operation": "material_lookup", "title": "Reference", "extra": map[string]any{"assetMode": "auto", "materialLibrary": localEcommerceMaterialLibrary}},
@@ -310,8 +318,8 @@ func TestLocalEcommerceMaterialLookupDefaultsToAnimeIPLibrary(t *testing.T) {
 	template.Data.Metadata = map[string]any{localEcommerceKey: map[string]any{"backend": localEcommerceBackend, "projectOutputRoot": defaultEcommerceProjectOutRoot}}
 	node := executorNode{ID: "reference", Operation: "material_lookup", Extra: map[string]any{"assetMode": "auto", "materialLibrary": localEcommerceMaterialLibrary}}
 	got := executorLocalMaterialLibraryPath(executorContext{workspace: workspace, template: template}, node)
-	if got != defaultAnimeIPMaterialLibrary {
-		t.Fatalf("material library path = %q, want default anime_ip path", got)
+	if got != materialRoot {
+		t.Fatalf("material library path = %q, want env fallback path", got)
 	}
 }
 

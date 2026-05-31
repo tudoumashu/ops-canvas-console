@@ -836,9 +836,11 @@ func executorLocalMaterialLibraryPath(execCtx executorContext, node executorNode
 		return pathValue
 	}
 	if config, ok := localEcommerceConfigFromTemplate(execCtx.template); ok {
-		return firstNonEmptyString(config.MaterialLibraryPath, defaultAnimeIPMaterialLibrary)
+		if pathValue := strings.TrimSpace(config.MaterialLibraryPath); pathValue != "" {
+			return pathValue
+		}
 	}
-	return defaultAnimeIPMaterialLibrary
+	return strings.TrimSpace(os.Getenv(localEcommerceMaterialLibraryEnv))
 }
 
 func findLocalMaterialReference(root string, input map[string]any) (localMaterialMatch, error) {
