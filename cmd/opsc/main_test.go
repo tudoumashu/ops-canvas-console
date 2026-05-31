@@ -592,6 +592,78 @@ func TestEcommerceImportTemplateCommandJSONRedactsSecretAndPath(t *testing.T) {
 	}
 }
 
+func TestEcommerceImportTemplateCommandLocalExecutable(t *testing.T) {
+	t.Setenv("OPSC_HYBRID_CLI_TOKEN", "cli-remote-secret")
+	root := filepath.Join(t.TempDir(), "workspace")
+	result, err := localworkspace.Init(localworkspace.InitOptions{Path: root, Name: "Local Ecommerce CLI Workspace"})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	workspace := result.Workspace
+	var gotAuth string
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet || r.URL.Path != "/api/admin/workflows/pdd/templates/remote_tpl" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, `{"code":0,"data":{"id":"remote_tpl","workflowType":"pdd","title":"Local Executable Ecommerce","spec":{"version":1,"nodes":[{"id":"reference","type":"material_lookup","operation":"material_lookup","extra":{}},{"id":"mockup_base","type":"material_lookup","operation":"material_lookup","extra":{"assetId":"pdd-mockup-sku-artwork-base"}},{"id":"package","type":"script","operation":"script","extra":{"executor":"vps"}},{"id":"sync_local","type":"script","operation":"script","extra":{"executor":"vps"}}],"edges":[],"settings":{"productConcurrency":1,"maxRetries":0}}},"msg":"ok"}`)
+	}))
+	defer remote.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"ecommerce", "import-template", "--local-executable", "--workspace", root, "--remote-url", remote.URL, "--remote-template", "remote_tpl", "--secret-env", "OPSC_HYBRID_CLI_TOKEN", "--json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("local ecommerce import exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if gotAuth != "Bearer cli-remote-secret" {
+		t.Fatalf("auth = %q, want env bearer", gotAuth)
+	}
+	for _, want := range []string{`"ok": true`, `"mode": "local_first"`, `"remoteTemplateId": "remote_tpl"`, `"localEcommerce"`} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	for _, secret := range []string{root, "cli-remote-secret"} {
+		if strings.Contains(stdout.String(), secret) || strings.Contains(stderr.String(), secret) {
+			t.Fatalf("CLI output leaked %q:\nstdout=%s\nstderr=%s", secret, stdout.String(), stderr.String())
+		}
+	}
+	templates, err := localworkspace.ListTemplates(workspace)
+	if err != nil {
+		t.Fatalf("ListTemplates() error = %v", err)
+	}
+	if len(templates) != 1 {
+		t.Fatalf("templates = %#v, want one local executable template", templates)
+	}
+	nodes := string(templates[0].Data.Nodes[0]) + string(templates[0].Data.Nodes[1]) + string(templates[0].Data.Nodes[2]) + string(templates[0].Data.Nodes[3])
+	for _, want := range []string{`"assetMode": "auto"`, `"fallback": "builtin_pdd_mockup_base"`, `"localEcommerceAction": "package"`, `"localEcommerceAction": "sync_local"`} {
+		if !strings.Contains(nodes, want) {
+			t.Fatalf("localized nodes missing %q:\n%s", want, nodes)
+		}
+	}
+	inputPath := filepath.Join(t.TempDir(), "input.json")
+	if err := os.WriteFile(inputPath, []byte(`{"inputs":[{"productTitle":"Mug"}]}`), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"ecommerce", "create-run", templates[0].ID, "--workspace", root, "--input-file", inputPath, "--project", "proj_local", "--json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("local ecommerce create-run exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	for _, want := range []string{`"ok": true`, `"mode": "local_first"`, `"projectId": "proj_local"`, `"status": "pending"`} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("create-run stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), `"remoteTemplateId"`) {
+		t.Fatalf("local create-run should not expose remoteTemplateId in result:\n%s", stdout.String())
+	}
+}
+
 func TestEcommerceImportTemplateCommandSupportsDirectEnvGoldenPath(t *testing.T) {
 	t.Setenv("OPSC_HYBRID_CLI_TOKEN", "cli-remote-secret")
 	root := filepath.Join(t.TempDir(), "workspace")

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -148,6 +149,139 @@ func TestRunExecutorOnceExecutesFixedMaterialTextAndImage(t *testing.T) {
 	}
 	if len(rebuiltRefs) != 3 {
 		t.Fatalf("rebuilt run artifact refs = %d, want 3", len(rebuiltRefs))
+	}
+}
+
+func TestRunExecutorOnceExecutesLocalEcommerceTemplate(t *testing.T) {
+	t.Setenv("OPSC_EXECUTOR_TEST_KEY", "provider-secret")
+	root := filepath.Join(t.TempDir(), "workspace")
+	workspace, profileID, _ := seedExecutorWorkspace(t, root)
+	projectRoot := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(filepath.Join(projectRoot, "outputs"), 0o755); err != nil {
+		t.Fatalf("create project outputs: %v", err)
+	}
+	project := writeExecutorProject(t, workspace, projectRoot, ProjectCapabilities{FSRead: true, FSWrite: true, ArtifactWrite: true})
+	materialRoot := filepath.Join(t.TempDir(), "materials")
+	materialDir := filepath.Join(materialRoot, "物语系列", "羽川翼")
+	if err := os.MkdirAll(materialDir, 0o755); err != nil {
+		t.Fatalf("create material dir: %v", err)
+	}
+	imageData, err := base64.StdEncoding.DecodeString(executorTestPNGBase64)
+	if err != nil {
+		t.Fatalf("decode material png: %v", err)
+	}
+	if err := AtomicWriteFile(filepath.Join(materialDir, "reference.png"), imageData, 0o600); err != nil {
+		t.Fatalf("write reference: %v", err)
+	}
+	if err := AtomicWriteFile(filepath.Join(materialDir, "metadata.json"), []byte(`{"work":"物语系列","character":"羽川翼","aliases":["翼"],"presentation":"anime character reference"}`), 0o600); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+
+	var editCalls int
+	var auths []string
+	var uploadedCounts []int
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auths = append(auths, r.Header.Get("Authorization"))
+		if r.URL.Path != "/v1/images/edits" {
+			t.Fatalf("provider path = %s, want image edits", r.URL.Path)
+		}
+		if err := r.ParseMultipartForm(16 << 20); err != nil {
+			t.Fatalf("parse multipart: %v", err)
+		}
+		editCalls++
+		uploadedCounts = append(uploadedCounts, len(r.MultipartForm.File["image"]))
+		if !strings.Contains(r.FormValue("prompt"), "羽川翼抱枕") || !strings.Contains(r.FormValue("prompt"), "1:") {
+			t.Fatalf("edit prompt missing product or image order: %q", r.FormValue("prompt"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"b64_json":"`+executorTestPNGBase64+`"}]}`)
+	}))
+	defer provider.Close()
+
+	profile := readExecutorProfile(t, workspace, profileID)
+	profile.Data.Channels[0].BaseURL = provider.URL
+	if err := WriteProfile(workspace, profile); err != nil {
+		t.Fatalf("WriteProfile() error = %v", err)
+	}
+
+	template := writeExecutorTemplate(t, workspace, []map[string]any{
+		{"id": "input", "type": "input", "operation": "input", "title": "Input"},
+		{"id": "reference", "type": "material_lookup", "operation": "material_lookup", "title": "Reference", "extra": map[string]any{"assetMode": "auto", "materialLibrary": localEcommerceMaterialLibrary, "materialLibraryPath": materialRoot}},
+		{"id": "source", "type": "image_edit", "operation": "image_edit", "title": "Source", "model": "image-edit-test", "prompt": "{{productTitle}} source {{uploaded_image_order}}"},
+		{"id": "mockup_base", "type": "material_lookup", "operation": "material_lookup", "title": "Mockup Base", "extra": map[string]any{"assetMode": "fixed", "assetId": builtinPDDMockupBaseAssetID, "fallback": "builtin_pdd_mockup_base"}},
+		{"id": "mockup", "type": "image_edit", "operation": "image_edit", "title": "Mockup", "model": "image-edit-test", "prompt": "{{productTitle}} mockup {{uploaded_image_order}}"},
+		{"id": "main", "type": "image_edit", "operation": "image_edit", "title": "Main", "model": "image-edit-test", "prompt": "{{productTitle}} main {{uploaded_image_order}}"},
+		{"id": "package", "type": "script", "operation": "script", "title": "Package", "extra": map[string]any{"executor": "local", "localEcommerceAction": "package", "outputRoot": defaultEcommerceProjectOutRoot}},
+		{"id": "sync_local", "type": "script", "operation": "script", "title": "Sync Local", "extra": map[string]any{"executor": "local", "localEcommerceAction": "sync_local", "outputRoot": defaultEcommerceProjectOutRoot}},
+	}, []map[string]any{
+		{"source": "input", "target": "reference"},
+		{"source": "reference", "target": "source", "inputOrder": 1, "inputAlias": "角色参考图", "fileSelector": "first"},
+		{"source": "source", "target": "mockup", "inputOrder": 1, "inputAlias": "生成原图", "fileSelector": "first"},
+		{"source": "mockup_base", "target": "mockup", "inputOrder": 2, "inputAlias": "规格图模板", "fileSelector": "first"},
+		{"source": "reference", "target": "main", "inputOrder": 1, "inputAlias": "角色参考图", "fileSelector": "first"},
+		{"source": "mockup", "target": "main", "inputOrder": 2, "inputAlias": "规格图", "fileSelector": "first"},
+		{"source": "source", "target": "package"},
+		{"source": "mockup", "target": "package"},
+		{"source": "main", "target": "package"},
+		{"source": "package", "target": "sync_local"},
+	})
+	template.Data.Metadata = map[string]any{localEcommerceKey: map[string]any{"backend": localEcommerceBackend, "materialLibraryPath": materialRoot, "projectOutputRoot": defaultEcommerceProjectOutRoot}}
+	if err := WriteTemplate(workspace, nextEnvelopeRevision(template, template.Data)); err != nil {
+		t.Fatalf("WriteTemplate(local ecommerce metadata) error = %v", err)
+	}
+	run := writeExecutorRunWithProject(t, workspace, template.ID, profile.ID, project.ID, RunStatusPending, map[string]any{"productTitle": "羽川翼抱枕", "character": "羽川翼", "theme": "物语系列"}, nil)
+	appendWaitingForExecutor(t, workspace, run.ID)
+
+	result, err := RunExecutorOnce(context.Background(), ExecutorOptions{WorkspacePath: root, RunID: run.ID, HTTPClient: provider.Client()})
+	if err != nil {
+		t.Fatalf("RunExecutorOnce() error = %v", err)
+	}
+	if result.Processed != 1 || len(result.Runs) != 1 {
+		t.Fatalf("executor result = %#v, want one local ecommerce run", result)
+	}
+	if got := result.Runs[0]; got.Status != RunStatusSuccess || got.Executed != 8 || got.ArtifactRefs != 7 {
+		t.Fatalf("run result = %#v, want all ecommerce nodes executed with artifacts", got)
+	}
+	if editCalls != 3 || strings.Trim(strings.Join(intSliceStrings(uploadedCounts), ","), ",") != "1,2,2" {
+		t.Fatalf("edit calls=%d uploadedCounts=%v, want source/mockup/main edits", editCalls, uploadedCounts)
+	}
+	for _, auth := range auths {
+		if auth != "Bearer provider-secret" {
+			t.Fatalf("provider auth = %q, want secretRef bearer", auth)
+		}
+	}
+	productDir := filepath.Join(projectRoot, "outputs", "ecommerce", run.ID, safeProjectFileStem("羽川翼抱枕"))
+	for _, rel := range []string{
+		filepath.Join("generated", "source.png"),
+		filepath.Join("待上架", safeProjectFileStem("羽川翼抱枕"), "规格图", "0001_sku_artwork.png"),
+		filepath.Join("待上架", safeProjectFileStem("羽川翼抱枕"), "主图", "1_主图.png"),
+		"package.json",
+		"sync-local.json",
+	} {
+		if _, err := os.Stat(filepath.Join(productDir, rel)); err != nil {
+			t.Fatalf("project output %s missing: %v", rel, err)
+		}
+	}
+	status, err := GetRunStatus(workspace, run.ID)
+	if err != nil {
+		t.Fatalf("GetRunStatus() error = %v", err)
+	}
+	events, err := ReadRunEvents(workspace, run.ID, 0)
+	if err != nil {
+		t.Fatalf("ReadRunEvents() error = %v", err)
+	}
+	refs, err := ListRunArtifacts(workspace, run.ID)
+	if err != nil {
+		t.Fatalf("ListRunArtifacts() error = %v", err)
+	}
+	assertNoExecutorSecretLeak(t, status, events, refs)
+	assertNoExecutorRootLeak(t, projectRoot, status, events, refs)
+	second, err := RunExecutorOnce(context.Background(), ExecutorOptions{WorkspacePath: root, RunID: run.ID, HTTPClient: provider.Client()})
+	if err != nil {
+		t.Fatalf("RunExecutorOnce() second error = %v", err)
+	}
+	if second.Processed != 0 {
+		t.Fatalf("second executor result = %#v, want no duplicate local ecommerce work", second)
 	}
 }
 
@@ -1056,4 +1190,12 @@ func assertNoExecutorRootLeak(t *testing.T, root string, values ...any) {
 			t.Fatalf("executor output leaked project root %q: %s", root, data)
 		}
 	}
+}
+
+func intSliceStrings(values []int) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, strconv.Itoa(value))
+	}
+	return out
 }

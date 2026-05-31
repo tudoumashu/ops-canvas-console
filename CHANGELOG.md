@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [新增] Local Workspace Phase 14：新增 `opsc ecommerce import-template --local-executable` 和 local-first ecommerce run 创建路径，已确认电商模板可在本地 executor 中执行自动 `anime_ip` 素材匹配、`image_edit`、内置 mockup 底版 fallback、项目相对打包和 `sync_local` marker；hybrid VPS-backed fallback 保持不变。
 + [优化] Local Workspace Phase 13：`opsc executor --watch` 增加 worker runtime metadata、单 worker lock 和退出清理，`workspace doctor` 增加 index freshness、stale executor worker 与 hybrid run 修复建议；补充 `opsc` 安装/自启动文档和 local workspace 回归入口说明。
 + [优化] Local Workspace browser smoke：`tools/local_workspace_browser_smoke.py` 与 `tools/hybrid_ecommerce_browser_smoke.py` 支持非临时浏览器 profile、evidence 输出和 localStorage credential/runtime 脱敏检查，方便本机或 CI 复用。
 + [新增] Local Workspace hybrid ecommerce：新增 `opsc executor --watch` 本地 worker 模式、Web UI profile/channel `secretRef` hybrid run 启动路径、远端阶段进度同步和状态页进度展示，并补充 fake VPS 浏览器 smoke helper；浏览器仍只连接 `opsc serve`，不保存或直连 VPS credential。

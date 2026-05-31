@@ -10,11 +10,14 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
+	"image/draw"
 	_ "image/gif"
 	_ "image/jpeg"
-	_ "image/png"
+	"image/png"
 	"io"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"os"
 	osexec "os/exec"
@@ -38,6 +41,8 @@ const (
 	executorEventNodeSkipped   = "executor.node.skipped"
 	executorEventRunCompleted  = "executor.run.completed"
 	executorEventRunFailed     = "executor.run.failed"
+
+	builtinPDDMockupBaseAssetID = "pdd-mockup-sku-artwork-base"
 )
 
 var templateVarPattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
@@ -100,13 +105,16 @@ type executorOutputMapping struct {
 }
 
 type executorEdge struct {
-	ID         string         `json:"id"`
-	From       string         `json:"from"`
-	To         string         `json:"to"`
-	Source     string         `json:"source,omitempty"`
-	Target     string         `json:"target,omitempty"`
-	FromHandle string         `json:"fromHandle,omitempty"`
-	Condition  map[string]any `json:"condition,omitempty"`
+	ID           string         `json:"id"`
+	From         string         `json:"from"`
+	To           string         `json:"to"`
+	Source       string         `json:"source,omitempty"`
+	Target       string         `json:"target,omitempty"`
+	FromHandle   string         `json:"fromHandle,omitempty"`
+	InputOrder   int            `json:"inputOrder,omitempty"`
+	InputAlias   string         `json:"inputAlias,omitempty"`
+	FileSelector string         `json:"fileSelector,omitempty"`
+	Condition    map[string]any `json:"condition,omitempty"`
 }
 
 type executorContext struct {
@@ -114,6 +122,7 @@ type executorContext struct {
 	run       Envelope[RunData]
 	template  Envelope[TemplateData]
 	project   *Envelope[ProjectData]
+	edges     []executorEdge
 	input     map[string]any
 	nodeOut   map[string]map[string]any
 	client    *http.Client
@@ -347,6 +356,7 @@ func executeLocalRun(ctx context.Context, workspace Workspace, run Envelope[RunD
 		run:       run,
 		template:  template,
 		project:   project,
+		edges:     edges,
 		input:     executorRunInput(run.Data.Input),
 		nodeOut:   executorNodeOutputMap(states),
 		client:    opts.HTTPClient,
@@ -634,6 +644,8 @@ func executeLocalNode(ctx context.Context, execCtx executorContext, node executo
 		return executeTextGeneration(ctx, execCtx, node, order)
 	case "image_generation":
 		return executeImageGeneration(ctx, execCtx, node, order)
+	case "image_edit":
+		return executeImageEdit(ctx, execCtx, node, order)
 	default:
 		return nil, NewError(ErrorWorkspaceInvalid, "local executor does not support node operation", 2, map[string]string{"nodeId": node.ID, "operation": node.Operation})
 	}
@@ -716,10 +728,26 @@ func executeMaterialLookup(execCtx executorContext, node executorNode, order int
 	assetID := stringFromMap(node.Extra, "assetId")
 	assetMode := stringFromMap(node.Extra, "assetMode")
 	if assetID == "" || (assetMode != "" && assetMode != "fixed") {
-		return nil, NewError(ErrorWorkspaceInvalid, "material_lookup only supports fixed local asset mode", 2, map[string]string{"nodeId": node.ID})
+		return executeAutoMaterialLookup(execCtx, node, order)
 	}
 	asset, err := ReadAsset(execCtx.workspace, assetID)
 	if err != nil {
+		if assetID == builtinPDDMockupBaseAssetID && stringFromMap(node.Extra, "fallback") == "builtin_pdd_mockup_base" {
+			data, mimeType, err := builtinPDDMockupBaseImage()
+			if err != nil {
+				return nil, err
+			}
+			artifact, err := createExecutorArtifactForNode(execCtx, node.ID, "image", mimeType, nonEmptyString(node.Title, "Mockup base"), data, "input", "material", order, map[string]any{
+				"type":       "builtin_material",
+				"assetId":    assetID,
+				"templateId": execCtx.template.ID,
+				"nodeId":     node.ID,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"assetId": assetID, "artifactIds": []string{artifact.ID}, "artifactId": artifact.ID, "first_file": executorArtifactWorkspaceRef(artifact)}, nil
+		}
 		return nil, err
 	}
 	if asset.Data.Type != "image" && !strings.HasPrefix(asset.Data.MIME, "image/") {
@@ -748,7 +776,181 @@ func executeMaterialLookup(execCtx executorContext, node executorNode, order int
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"assetId": assetID, "artifactIds": []string{artifact.ID}, "artifactId": artifact.ID}, nil
+	return map[string]any{"assetId": assetID, "artifactIds": []string{artifact.ID}, "artifactId": artifact.ID, "first_file": executorArtifactWorkspaceRef(artifact)}, nil
+}
+
+func executeAutoMaterialLookup(execCtx executorContext, node executorNode, order int) (map[string]any, error) {
+	root := executorLocalMaterialLibraryPath(execCtx, node)
+	if root == "" {
+		return nil, NewError(ErrorWorkspaceInvalid, "auto material_lookup requires a local material library", 2, map[string]string{"nodeId": node.ID})
+	}
+	match, err := findLocalMaterialReference(root, execCtx.input)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(match.Path)
+	if err != nil {
+		return nil, WrapError(ErrorInternal, "read matched material", 5, err)
+	}
+	mimeType := nonEmptyString(mime.TypeByExtension(filepath.Ext(match.Path)), "image/png")
+	title := nonEmptyString(strings.TrimSpace(match.Work+" "+match.Character), nonEmptyString(node.Title, "Matched material"))
+	artifact, err := createExecutorArtifactForNode(execCtx, node.ID, "image", mimeType, title, data, "input", "material", order, map[string]any{
+		"type":            "local_material_library",
+		"library":         localEcommerceMaterialLibrary,
+		"templateId":      execCtx.template.ID,
+		"nodeId":          node.ID,
+		"work":            match.Work,
+		"character":       match.Character,
+		"matchedBy":       match.MatchedBy,
+		"sourceDirectory": filepath.Base(filepath.Dir(match.Path)),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{
+		"materialLibrary": localEcommerceMaterialLibrary,
+		"work":            match.Work,
+		"character":       match.Character,
+		"matchedBy":       match.MatchedBy,
+		"artifactIds":     []string{artifact.ID},
+		"artifactId":      artifact.ID,
+		"first_file":      executorArtifactWorkspaceRef(artifact),
+	}
+	if match.Presentation != "" {
+		out["presentation"] = match.Presentation
+	}
+	return out, nil
+}
+
+type localMaterialMatch struct {
+	Path         string
+	Work         string
+	Character    string
+	Presentation string
+	MatchedBy    string
+	Score        int
+}
+
+func executorLocalMaterialLibraryPath(execCtx executorContext, node executorNode) string {
+	if pathValue := stringFromMap(node.Extra, "materialLibraryPath"); pathValue != "" {
+		return pathValue
+	}
+	if config, ok := localEcommerceConfigFromTemplate(execCtx.template); ok {
+		return config.MaterialLibraryPath
+	}
+	return defaultAnimeIPMaterialLibrary
+}
+
+func findLocalMaterialReference(root string, input map[string]any) (localMaterialMatch, error) {
+	root = strings.TrimSpace(root)
+	if root == "" || !filepath.IsAbs(root) {
+		return localMaterialMatch{}, NewError(ErrorWorkspaceInvalid, "material library path is not configured", 2, nil)
+	}
+	stat, err := os.Stat(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return localMaterialMatch{}, NewError(ErrorWorkspaceNotFound, "material library is not accessible", 2, nil)
+		}
+		return localMaterialMatch{}, WrapError(ErrorInternal, "open material library", 5, err)
+	}
+	if !stat.IsDir() {
+		return localMaterialMatch{}, NewError(ErrorWorkspaceInvalid, "material library is not a directory", 2, nil)
+	}
+	best := localMaterialMatch{}
+	err = filepath.WalkDir(root, func(pathValue string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		name := strings.ToLower(entry.Name())
+		if !strings.HasPrefix(name, "reference.") || !executorImageFileName(name) {
+			return nil
+		}
+		candidate := localMaterialMatch{Path: pathValue}
+		dir := filepath.Dir(pathValue)
+		if meta, err := readLocalMaterialMetadata(filepath.Join(dir, "metadata.json")); err == nil {
+			candidate.Work = stringFromMap(meta, "work")
+			candidate.Character = stringFromMap(meta, "character")
+			candidate.Presentation = stringFromMap(meta, "presentation")
+			candidate.Score, candidate.MatchedBy = scoreLocalMaterialCandidate(input, candidate, meta)
+		} else {
+			rel, _ := filepath.Rel(root, dir)
+			parts := strings.Split(filepath.ToSlash(rel), "/")
+			if len(parts) >= 1 {
+				candidate.Work = parts[0]
+			}
+			if len(parts) >= 2 {
+				candidate.Character = parts[1]
+			}
+			candidate.Score, candidate.MatchedBy = scoreLocalMaterialCandidate(input, candidate, nil)
+		}
+		if candidate.Score > best.Score || (candidate.Score == best.Score && best.Path == "") {
+			best = candidate
+		}
+		return nil
+	})
+	if err != nil {
+		return localMaterialMatch{}, WrapError(ErrorInternal, "scan material library", 5, err)
+	}
+	if best.Path == "" || best.Score <= 0 {
+		return localMaterialMatch{}, NewError(ErrorWorkspaceNotFound, "no matching material found in local library", 2, nil)
+	}
+	return best, nil
+}
+
+func readLocalMaterialMetadata(pathValue string) (map[string]any, error) {
+	data, err := os.ReadFile(pathValue)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func scoreLocalMaterialCandidate(input map[string]any, candidate localMaterialMatch, metadata map[string]any) (int, string) {
+	needles := []struct {
+		label string
+		value string
+		score int
+	}{
+		{"character", stringFromAny(firstNonNil(input["character"], input["animeCharacter"], input["ipCharacter"])), 60},
+		{"theme", firstNonEmptyString(stringFromAny(firstNonNil(input["theme"], input["work"], input["animeIP"], input["sourceTitle"])), ""), 40},
+		{"productTitle", stringFromAny(firstNonNil(input["productTitle"], input["title"], input["name"])), 20},
+	}
+	haystack := normalizedMaterialText(candidate.Work + " " + candidate.Character + " " + stringFromAny(metadata["aliases"]) + " " + stringFromAny(metadata["tags"]))
+	score := 0
+	matched := []string{}
+	for _, needle := range needles {
+		value := normalizedMaterialText(needle.value)
+		if value == "" {
+			continue
+		}
+		if strings.Contains(haystack, value) || strings.Contains(value, normalizedMaterialText(candidate.Character)) || strings.Contains(value, normalizedMaterialText(candidate.Work)) {
+			score += needle.score
+			matched = append(matched, needle.label)
+		}
+	}
+	if score == 0 && candidate.Path != "" {
+		score = 1
+		matched = append(matched, "fallback")
+	}
+	return score, strings.Join(matched, ",")
+}
+
+func normalizedMaterialText(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	replacer := strings.NewReplacer(" ", "", "_", "", "-", "", "·", "", "　", "")
+	return replacer.Replace(value)
+}
+
+func executorImageFileName(name string) bool {
+	ext := strings.ToLower(filepath.Ext(name))
+	return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp"
 }
 
 func executeTextGeneration(ctx context.Context, execCtx executorContext, node executorNode, order int) (map[string]any, error) {
@@ -844,6 +1046,174 @@ func executeImageGeneration(ctx context.Context, execCtx executorContext, node e
 	return output, nil
 }
 
+func executeImageEdit(ctx context.Context, execCtx executorContext, node executorNode, order int) (map[string]any, error) {
+	refs, err := executorImageInputRefs(execCtx, node)
+	if err != nil {
+		return nil, err
+	}
+	if len(refs) == 0 {
+		return nil, NewError(ErrorWorkspaceInvalid, "image_edit requires upstream image artifacts", 2, map[string]string{"nodeId": node.ID})
+	}
+	promptInput := cloneMap(execCtx.input)
+	promptInput["uploaded_image_order"] = executorUploadedImageOrder(refs)
+	promptInput["index1"] = 1
+	promptInput["count"] = max(1, node.Count)
+	promptInput["runId"] = execCtx.run.ID
+	prompt := renderExecutorPrompt(node.Prompt, promptInput, execCtx.nodeOut)
+	if strings.TrimSpace(prompt) == "" {
+		return nil, NewError(ErrorWorkspaceInvalid, "image_edit prompt is empty", 2, map[string]string{"nodeId": node.ID})
+	}
+	model := nonEmptyString(node.Model, "gpt-image-2")
+	fields := map[string]string{
+		"model":           model,
+		"prompt":          prompt,
+		"n":               fmt.Sprint(max(1, node.Count)),
+		"response_format": "b64_json",
+	}
+	if strings.TrimSpace(node.Size) != "" {
+		fields["size"] = strings.TrimSpace(node.Size)
+	}
+	if strings.TrimSpace(node.Quality) != "" {
+		fields["quality"] = strings.TrimSpace(node.Quality)
+	}
+	body, err := postLocalAIMultipart(ctx, execCtx.workspace, execCtx.run.Data.ProfileID, "", execCtx.client, "/ai/v1/images/edits", fields, refs)
+	if err != nil {
+		return nil, err
+	}
+	images, err := parseLocalAIImages(ctx, execCtx.client, body)
+	if err != nil {
+		return nil, err
+	}
+	inputIDs := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		inputIDs = append(inputIDs, ref.ID)
+	}
+	artifactIDs := make([]string, 0, len(images))
+	files := make([]executorGeneratedFile, 0, len(images))
+	for i, imageData := range images {
+		artifact, err := createExecutorArtifactForNode(execCtx, node.ID, "image", "image/png", nonEmptyString(node.Title, "Edited image"), imageData, "primary_output", "image", order+i, map[string]any{
+			"type":             "image_edit",
+			"model":            model,
+			"templateId":       execCtx.template.ID,
+			"nodeId":           node.ID,
+			"index":            i,
+			"inputArtifactIds": inputIDs,
+		})
+		if err != nil {
+			return nil, err
+		}
+		artifactIDs = append(artifactIDs, artifact.ID)
+		files = append(files, executorGeneratedFile{Name: "image", Data: imageData, MIME: "image/png"})
+	}
+	output := map[string]any{"artifactIds": artifactIDs, "model": model, "count": len(artifactIDs), "inputArtifactIds": inputIDs}
+	if len(artifactIDs) > 0 {
+		output["artifactId"] = artifactIDs[0]
+		output["first_file"] = "artifact:" + artifactIDs[0]
+	}
+	return applyProjectOutputMappings(execCtx, node, output, files)
+}
+
+type executorImageInputRef struct {
+	ID    string
+	Title string
+	MIME  string
+	Data  []byte
+	Role  string
+}
+
+func executorImageInputRefs(execCtx executorContext, node executorNode) ([]executorImageInputRef, error) {
+	type source struct {
+		edge executorEdge
+		ids  []string
+	}
+	sources := []source{}
+	for _, edge := range execCtx.edges {
+		if edge.To != node.ID {
+			continue
+		}
+		ids := executorArtifactIDsFromOutput(execCtx.nodeOut[edge.From])
+		if len(ids) == 0 {
+			continue
+		}
+		if strings.TrimSpace(edge.FileSelector) == "last" && len(ids) > 1 {
+			ids = ids[len(ids)-1:]
+		} else if strings.TrimSpace(edge.FileSelector) != "all" && len(ids) > 1 {
+			ids = ids[:1]
+		}
+		sources = append(sources, source{edge: edge, ids: ids})
+	}
+	sort.SliceStable(sources, func(i int, j int) bool {
+		if sources[i].edge.InputOrder != sources[j].edge.InputOrder {
+			return sources[i].edge.InputOrder < sources[j].edge.InputOrder
+		}
+		return sources[i].edge.From < sources[j].edge.From
+	})
+	out := []executorImageInputRef{}
+	for _, source := range sources {
+		role := firstNonEmptyString(source.edge.InputAlias, source.edge.From)
+		for _, artifactID := range source.ids {
+			ref, err := readExecutorArtifactImage(execCtx, artifactID)
+			if err != nil {
+				return nil, err
+			}
+			ref.Role = role
+			out = append(out, ref)
+		}
+	}
+	return out, nil
+}
+
+func executorArtifactIDsFromOutput(output map[string]any) []string {
+	ids := []string{}
+	for _, value := range []any{output["artifactIds"], output["artifacts"]} {
+		switch typed := value.(type) {
+		case []string:
+			for _, id := range typed {
+				if strings.TrimSpace(id) != "" {
+					ids = append(ids, strings.TrimSpace(id))
+				}
+			}
+		case []any:
+			for _, item := range typed {
+				if id := strings.TrimSpace(stringFromAny(item)); id != "" {
+					ids = append(ids, id)
+				}
+			}
+		}
+	}
+	if id := strings.TrimSpace(stringFromAny(output["artifactId"])); id != "" {
+		ids = append(ids, id)
+	}
+	return uniqueStrings(ids)
+}
+
+func readExecutorArtifactImage(execCtx executorContext, artifactID string) (executorImageInputRef, error) {
+	artifact, err := ReadArtifact(execCtx.workspace, artifactID)
+	if err != nil {
+		return executorImageInputRef{}, err
+	}
+	if artifact.Data.Type != "image" && !strings.HasPrefix(artifact.Data.MIME, "image/") {
+		return executorImageInputRef{}, NewError(ErrorWorkspaceInvalid, "image_edit input artifact must be an image", 2, map[string]string{"artifactId": artifactID})
+	}
+	rel := artifact.Data.Files["original"]
+	if !isWorkspaceRelativeFile(rel) {
+		return executorImageInputRef{}, NewError(ErrorWorkspaceInvalid, "artifact original file ref is invalid", 2, map[string]string{"artifactId": artifactID})
+	}
+	data, err := os.ReadFile(filepath.Join(ArtifactRepository(execCtx.workspace).Dir(artifact.ID), filepath.FromSlash(rel)))
+	if err != nil {
+		return executorImageInputRef{}, WrapError(ErrorInternal, "read image_edit input artifact", 5, err)
+	}
+	return executorImageInputRef{ID: artifact.ID, Title: artifact.Data.Title, MIME: nonEmptyString(artifact.Data.MIME, "image/png"), Data: data}, nil
+}
+
+func executorUploadedImageOrder(refs []executorImageInputRef) string {
+	items := make([]string, 0, len(refs))
+	for index, ref := range refs {
+		items = append(items, fmt.Sprintf("%d:%s", index+1, firstNonEmptyString(ref.Role, ref.Title, ref.ID)))
+	}
+	return strings.Join(items, ", ")
+}
+
 func executeCondition(execCtx executorContext, node executorNode) map[string]any {
 	context := executorConditionContext(execCtx)
 	rules := executorConditionRules(node.Extra["conditions"])
@@ -872,6 +1242,9 @@ func executeCondition(execCtx executorContext, node executorNode) map[string]any
 }
 
 func executeProjectScript(ctx context.Context, execCtx executorContext, node executorNode, order int) (map[string]any, error) {
+	if action := localEcommerceScriptAction(execCtx, node); action != "" {
+		return executeLocalEcommerceScriptAction(execCtx, node, action, order)
+	}
 	if execCtx.project == nil {
 		return nil, NewError(ErrorWorkspaceInvalid, "script node requires run projectId", 2, map[string]string{"nodeId": node.ID})
 	}
@@ -942,6 +1315,149 @@ func executeProjectScript(ctx context.Context, execCtx executorContext, node exe
 		output["artifactId"] = artifact.ID
 	}
 	return applyProjectOutputMappings(execCtx, node, output, []executorGeneratedFile{{Name: "stdout", Data: stdout.Bytes(), MIME: "text/plain; charset=utf-8"}})
+}
+
+func localEcommerceScriptAction(execCtx executorContext, node executorNode) string {
+	action := stringFromMap(node.Extra, "localEcommerceAction")
+	if action != "" {
+		return action
+	}
+	if _, ok := localEcommerceConfigFromTemplate(execCtx.template); !ok {
+		return ""
+	}
+	switch node.ID {
+	case "package", "sync_local":
+		return node.ID
+	default:
+		return ""
+	}
+}
+
+func executeLocalEcommerceScriptAction(execCtx executorContext, node executorNode, action string, order int) (map[string]any, error) {
+	if execCtx.project == nil {
+		return nil, NewError(ErrorWorkspaceInvalid, "local ecommerce script action requires run projectId", 2, map[string]string{"nodeId": node.ID})
+	}
+	if err := requireExecutorArtifactWrite(execCtx); err != nil {
+		return nil, err
+	}
+	switch action {
+	case "package":
+		return executeLocalEcommercePackage(execCtx, node, order)
+	case "sync_local":
+		return executeLocalEcommerceSyncLocal(execCtx, node, order)
+	default:
+		return nil, NewError(ErrorWorkspaceInvalid, "local ecommerce script action is not supported", 2, map[string]string{"nodeId": node.ID, "action": action})
+	}
+}
+
+func executeLocalEcommercePackage(execCtx executorContext, node executorNode, order int) (map[string]any, error) {
+	root := localEcommerceOutputRoot(execCtx, node)
+	productTitle := safeProjectFileStem(firstNonEmptyString(stringFromAny(firstNonNil(execCtx.input["productTitle"], execCtx.input["title"], execCtx.input["name"])), "product"))
+	base := path.Join(root, execCtx.run.ID, productTitle)
+	sourceFiles := []struct {
+		NodeID string
+		Path   string
+		Kind   string
+	}{
+		{NodeID: "source", Path: path.Join(base, "generated", "source.png"), Kind: "source"},
+		{NodeID: "mockup", Path: path.Join(base, "待上架", productTitle, "规格图", "0001_sku_artwork.png"), Kind: "mockup"},
+		{NodeID: "main", Path: path.Join(base, "待上架", productTitle, "主图", "1_主图.png"), Kind: "main"},
+	}
+	written := []map[string]any{}
+	for _, item := range sourceFiles {
+		artifactID := firstArtifactIDFromNode(execCtx.nodeOut[item.NodeID])
+		if artifactID == "" {
+			return nil, NewError(ErrorWorkspaceInvalid, "local ecommerce package missing upstream artifact", 2, map[string]string{"nodeId": node.ID, "sourceNodeId": item.NodeID})
+		}
+		file, err := readExecutorArtifactImage(execCtx, artifactID)
+		if err != nil {
+			return nil, err
+		}
+		rel, err := writeExecutorProjectFile(execCtx, item.Path, file.Data)
+		if err != nil {
+			return nil, err
+		}
+		written = append(written, map[string]any{"kind": item.Kind, "path": rel, "artifactId": artifactID, "bytes": len(file.Data)})
+	}
+	manifest := map[string]any{
+		"runId":        execCtx.run.ID,
+		"templateId":   execCtx.template.ID,
+		"productTitle": firstNonEmptyString(stringFromAny(firstNonNil(execCtx.input["productTitle"], execCtx.input["title"], execCtx.input["name"])), "product"),
+		"outputs":      written,
+	}
+	manifestData, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return nil, WrapError(ErrorInternal, "encode local ecommerce package manifest", 5, err)
+	}
+	manifestRel, err := writeExecutorProjectFile(execCtx, path.Join(base, "package.json"), manifestData)
+	if err != nil {
+		return nil, err
+	}
+	artifact, err := createExecutorArtifactForNode(execCtx, node.ID, "text", "application/json", nonEmptyString(node.Title, "Local ecommerce package"), manifestData, "primary_output", "manifest", order, map[string]any{
+		"type":       "local_ecommerce_package",
+		"templateId": execCtx.template.ID,
+		"nodeId":     node.ID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"mode":           localEcommerceBackend,
+		"packageRoot":    base,
+		"manifestPath":   manifestRel,
+		"projectOutputs": written,
+		"artifactIds":    []string{artifact.ID},
+		"artifactId":     artifact.ID,
+		"first_file":     executorArtifactWorkspaceRef(artifact),
+	}, nil
+}
+
+func executeLocalEcommerceSyncLocal(execCtx executorContext, node executorNode, order int) (map[string]any, error) {
+	root := localEcommerceOutputRoot(execCtx, node)
+	productTitle := safeProjectFileStem(firstNonEmptyString(stringFromAny(firstNonNil(execCtx.input["productTitle"], execCtx.input["title"], execCtx.input["name"])), "product"))
+	packageRoot := path.Join(root, execCtx.run.ID, productTitle)
+	marker := map[string]any{
+		"runId":       execCtx.run.ID,
+		"templateId":  execCtx.template.ID,
+		"packageRoot": packageRoot,
+		"status":      "synced",
+	}
+	markerData, err := json.MarshalIndent(marker, "", "  ")
+	if err != nil {
+		return nil, WrapError(ErrorInternal, "encode local ecommerce sync marker", 5, err)
+	}
+	markerRel, err := writeExecutorProjectFile(execCtx, path.Join(packageRoot, "sync-local.json"), markerData)
+	if err != nil {
+		return nil, err
+	}
+	artifact, err := createExecutorArtifactForNode(execCtx, node.ID, "text", "application/json", nonEmptyString(node.Title, "Local ecommerce sync"), markerData, "primary_output", "sync", order, map[string]any{
+		"type":       "local_ecommerce_sync",
+		"templateId": execCtx.template.ID,
+		"nodeId":     node.ID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"mode":           localEcommerceBackend,
+		"synced":         true,
+		"packageRoot":    packageRoot,
+		"markerPath":     markerRel,
+		"artifactIds":    []string{artifact.ID},
+		"artifactId":     artifact.ID,
+		"first_file":     executorArtifactWorkspaceRef(artifact),
+		"projectOutputs": []map[string]any{{"kind": "sync", "path": markerRel, "bytes": len(markerData)}},
+	}, nil
+}
+
+func localEcommerceOutputRoot(execCtx executorContext, node executorNode) string {
+	if root := stringFromMap(node.Extra, "outputRoot"); root != "" {
+		return root
+	}
+	if config, ok := localEcommerceConfigFromTemplate(execCtx.template); ok {
+		return firstNonEmptyString(config.ProjectOutputRoot, defaultEcommerceProjectOutRoot)
+	}
+	return defaultEcommerceProjectOutRoot
 }
 
 func createExecutorArtifactForNode(execCtx executorContext, nodeID string, artifactType string, mimeType string, title string, data []byte, role string, slot string, order int, source map[string]any) (Envelope[ArtifactData], error) {
@@ -1029,6 +1545,12 @@ func selectExecutorGeneratedFile(files []executorGeneratedFile, kind string) (ex
 }
 
 func writeExecutorProjectFile(execCtx executorContext, relPath string, data []byte) (string, error) {
+	parent := path.Dir(filepath.ToSlash(strings.TrimSpace(relPath)))
+	if parent != "." && parent != "" {
+		if err := ensureExecutorProjectDir(execCtx, parent); err != nil {
+			return "", err
+		}
+	}
 	resolved, err := resolveExecutorProjectPath(execCtx, ProjectPathWrite, relPath)
 	if err != nil {
 		return "", err
@@ -1037,6 +1559,27 @@ func writeExecutorProjectFile(execCtx executorContext, relPath string, data []by
 		return "", redactExecutorProjectError(*execCtx.project, err)
 	}
 	return resolved.RelativePath, nil
+}
+
+func ensureExecutorProjectDir(execCtx executorContext, relDir string) error {
+	relDir = path.Clean(filepath.ToSlash(strings.TrimSpace(relDir)))
+	if relDir == "." || relDir == "" {
+		return nil
+	}
+	parent := path.Dir(relDir)
+	if parent != "." && parent != relDir {
+		if err := ensureExecutorProjectDir(execCtx, parent); err != nil {
+			return err
+		}
+	}
+	resolved, err := resolveExecutorProjectPath(execCtx, ProjectPathWrite, relDir)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(resolved.Path, 0o700); err != nil {
+		return redactExecutorProjectError(*execCtx.project, err)
+	}
+	return nil
 }
 
 func resolveExecutorProjectPath(execCtx executorContext, operation ProjectPathOperation, relPath string) (ProjectPathResult, error) {
@@ -1070,6 +1613,62 @@ func requireExecutorArtifactWrite(execCtx executorContext) error {
 
 func executorArtifactWriteAllowed(execCtx executorContext) bool {
 	return execCtx.project == nil || execCtx.project.Data.Capabilities.ArtifactWrite
+}
+
+func postLocalAIMultipart(ctx context.Context, workspace Workspace, profileID string, channelID string, client *http.Client, localPath string, fields map[string]string, files []executorImageInputRef) ([]byte, error) {
+	channel, err := selectLocalAIChannel(workspace, profileID, channelID)
+	if err != nil {
+		return nil, err
+	}
+	secret, err := resolveAIProxySecret(channel.SecretRef)
+	if err != nil {
+		return nil, err
+	}
+	target, err := buildAIProxyTargetURL(channel.BaseURL, localPath, "")
+	if err != nil {
+		return nil, err
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for key, value := range fields {
+		if err := writer.WriteField(key, value); err != nil {
+			return nil, WrapError(ErrorInternal, "encode ai multipart field", 5, err)
+		}
+	}
+	for index, file := range files {
+		part, err := writer.CreateFormFile("image", fmt.Sprintf("input_%d%s", index+1, extensionForMIME(file.MIME, "image")))
+		if err != nil {
+			return nil, WrapError(ErrorInternal, "encode ai multipart file", 5, err)
+		}
+		if _, err := part.Write(file.Data); err != nil {
+			return nil, WrapError(ErrorInternal, "write ai multipart file", 5, err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return nil, WrapError(ErrorInternal, "close ai multipart request", 5, err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), &body)
+	if err != nil {
+		return nil, WrapError(ErrorInternal, "create ai request", 5, err)
+	}
+	request.Header.Set("Authorization", "Bearer "+secret)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	if client == nil {
+		client = http.DefaultClient
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, WrapError(ErrorInternal, "call ai provider", 5, err)
+	}
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 64<<20))
+	if err != nil {
+		return nil, WrapError(ErrorInternal, "read ai provider response", 5, err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, NewError(ErrorWorkspaceInvalid, "ai provider request failed", 2, map[string]any{"status": response.StatusCode, "message": localAIErrorMessage(responseBody)})
+	}
+	return responseBody, nil
 }
 
 func postLocalAIJSON(ctx context.Context, workspace Workspace, profileID string, channelID string, client *http.Client, localPath string, payload any) ([]byte, error) {
@@ -1270,6 +1869,65 @@ func createExecutorArtifact(workspace Workspace, runID string, nodeID string, ar
 		return Envelope[ArtifactData]{}, err
 	}
 	return artifact, nil
+}
+
+func executorArtifactWorkspaceRef(artifact Envelope[ArtifactData]) string {
+	if artifact.ID == "" {
+		return ""
+	}
+	return "artifact:" + artifact.ID
+}
+
+func firstArtifactIDFromNode(output map[string]any) string {
+	ids := executorArtifactIDsFromOutput(output)
+	if len(ids) == 0 {
+		return ""
+	}
+	return ids[0]
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func safeProjectFileStem(value string) string {
+	value = strings.TrimSpace(value)
+	value = regexp.MustCompile(`[^\p{L}\p{N}._-]+`).ReplaceAllString(value, "_")
+	value = strings.Trim(value, "._-")
+	if value == "" {
+		return "item"
+	}
+	if len([]rune(value)) > 80 {
+		runes := []rune(value)
+		value = string(runes[:80])
+	}
+	return value
+}
+
+func builtinPDDMockupBaseImage() ([]byte, string, error) {
+	img := image.NewRGBA(image.Rect(0, 0, 1024, 1024))
+	draw.Draw(img, img.Bounds(), &image.Uniform{C: color.RGBA{R: 246, G: 246, B: 243, A: 255}}, image.Point{}, draw.Src)
+	pillow := color.RGBA{R: 252, G: 252, B: 250, A: 255}
+	shadow := color.RGBA{R: 224, G: 224, B: 220, A: 255}
+	for _, rect := range []image.Rectangle{image.Rect(150, 100, 470, 930), image.Rect(555, 100, 875, 930)} {
+		draw.Draw(img, rect.Add(image.Pt(10, 10)), &image.Uniform{C: shadow}, image.Point{}, draw.Src)
+		draw.Draw(img, rect, &image.Uniform{C: pillow}, image.Point{}, draw.Src)
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, "", WrapError(ErrorInternal, "encode builtin mockup base", 5, err)
+	}
+	return buf.Bytes(), "image/png", nil
 }
 
 func updateExecutorRun(workspace Workspace, run Envelope[RunData], status string, output map[string]any, errorMessage string) (Envelope[RunData], error) {
@@ -1510,8 +2168,14 @@ func renderExecutorPrompt(prompt string, input map[string]any, nodeOutput map[st
 			return stringifyTemplateValue(firstNonNil(input["productTitle"], input["title"], input["name"]))
 		case key == "index":
 			return "0"
+		case key == "index1":
+			return stringifyTemplateValue(firstNonNil(input["index1"], 1))
+		case key == "count":
+			return stringifyTemplateValue(firstNonNil(input["count"], 1))
+		case key == "uploaded_image_order":
+			return stringifyTemplateValue(input["uploaded_image_order"])
 		default:
-			return ""
+			return stringifyTemplateValue(lookupPath(input, key))
 		}
 	})
 }

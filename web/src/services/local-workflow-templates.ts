@@ -19,6 +19,12 @@ import {
 } from "@/services/local-workspace";
 import type { StartWorkflowTemplateRunRequest, StartWorkflowTemplateRunResult, WorkflowTemplate, WorkflowTemplateEdge, WorkflowTemplateList, WorkflowTemplateNode, WorkflowTemplateSpec } from "@/services/api/pdd";
 
+const LOCAL_ECOMMERCE_KEY = "localEcommerce";
+const LOCAL_ECOMMERCE_BACKEND = "local_first";
+const LOCAL_ECOMMERCE_MATERIAL_LIBRARY = "anime_ip";
+const DEFAULT_ECOMMERCE_PROJECT_OUTPUT_ROOT = "outputs/ecommerce";
+const BUILTIN_PDD_MOCKUP_BASE_ASSET_ID = "pdd-mockup-sku-artwork-base";
+
 export function isLocalWorkflowTemplateId(id?: string) {
     return Boolean(id && id.startsWith("tpl_"));
 }
@@ -37,7 +43,7 @@ export async function saveLocalPDDWorkflowTemplate(baseUrl: string, template: Pa
     const data = workflowTemplateToLocalData(template);
     if (template.id) {
         const current = await getLocalTemplate(baseUrl, template.id);
-        preserveLocalTemplateHybridMetadata(data, current.data);
+        preserveLocalTemplateExecutionMetadata(data, current.data);
         return workflowTemplateFromLocalDocument(await updateLocalTemplate(baseUrl, template.id, template.revision || current.revision, data));
     }
     return workflowTemplateFromLocalDocument(await createLocalTemplate(baseUrl, data));
@@ -52,8 +58,9 @@ export async function startLocalPDDWorkflowTemplateRun(baseUrl: string, template
     const template = workflowTemplateFromLocalDocument(localTemplate);
     const settings = template.spec.settings as WorkflowTemplateSpec["settings"] & { defaultProfileId?: string; defaultProjectId?: string; profileId?: string; projectId?: string };
     const hybridMetadata = hybridRunMetadataFromLocalTemplate(localTemplate.data, payload, settings);
-    const profileId = payload.profileId || settings.defaultProfileId || settings.profileId || hybridMetadata?.profileId;
-    const channelId = hybridMetadata?.channelId;
+    const localEcommerceMetadata = hybridMetadata ? undefined : localEcommerceRunMetadataFromLocalTemplate(localTemplate.data, payload, settings);
+    const profileId = payload.profileId || settings.defaultProfileId || settings.profileId || hybridMetadata?.profileId || localEcommerceMetadata?.profileId;
+    const channelId = hybridMetadata?.channelId || localEcommerceMetadata?.channelId;
     const run = await createLocalRun(baseUrl, {
         templateId,
         status: "pending",
@@ -71,6 +78,7 @@ export async function startLocalPDDWorkflowTemplateRun(baseUrl: string, template
             templateRevision: template.revision,
             executor: "opsc",
             ...(hybridMetadata ? { hybridEcommerce: { ...hybridMetadata, profileId, channelId } } : {}),
+            ...(localEcommerceMetadata ? { localEcommerce: { ...localEcommerceMetadata, profileId, channelId } } : {}),
         },
     });
     const nodeResults = await Promise.all(template.spec.nodes.map((node, index) => initializeLocalRunNode(baseUrl, run.id, template, node, index)));
@@ -116,6 +124,13 @@ async function initializeLocalRunNode(baseUrl: string, runId: string, template: 
         await writeLocalRunNodeState(baseUrl, runId, node.id, {
             status: "pending",
             metadata: baseMetadata,
+        });
+        return { nodeId: node.id };
+    }
+    if (assetId === BUILTIN_PDD_MOCKUP_BASE_ASSET_ID && node.extra?.fallback === "builtin_pdd_mockup_base") {
+        await writeLocalRunNodeState(baseUrl, runId, node.id, {
+            status: "pending",
+            metadata: { ...baseMetadata, assetId, fallback: "builtin_pdd_mockup_base" },
         });
         return { nodeId: node.id };
     }
@@ -239,20 +254,31 @@ function workflowTemplateToLocalData(template: Partial<WorkflowTemplate>): Local
         description: template.description || "",
         workflowType: template.workflowType || "pdd",
         version: spec.version || 1,
-        nodes: (spec.nodes || []) as unknown as Array<Record<string, unknown>>,
+        nodes: localizeLocalEcommerceNodes((spec.nodes || []) as unknown as Array<Record<string, unknown>>),
         edges: (spec.edges || []) as unknown as Array<Record<string, unknown>>,
         settings: { ...(spec.settings || {}) },
-        metadata: { source: "web-ui" },
+        metadata: {
+            source: "web-ui",
+            [LOCAL_ECOMMERCE_KEY]: {
+                version: 1,
+                backend: LOCAL_ECOMMERCE_BACKEND,
+                materialLibrary: LOCAL_ECOMMERCE_MATERIAL_LIBRARY,
+                projectOutputRoot: DEFAULT_ECOMMERCE_PROJECT_OUTPUT_ROOT,
+            },
+        },
     };
 }
 
-function preserveLocalTemplateHybridMetadata(next: LocalTemplateData, current: LocalTemplateData) {
+function preserveLocalTemplateExecutionMetadata(next: LocalTemplateData, current: LocalTemplateData) {
     const hybrid = current.metadata?.hybridEcommerce;
+    let preservedHybrid = false;
     if (hybrid && typeof hybrid === "object") {
         next.metadata = {
             ...(next.metadata || {}),
             hybridEcommerce: hybrid,
         };
+        delete next.metadata[LOCAL_ECOMMERCE_KEY];
+        preservedHybrid = true;
     }
     const settingsHybrid = current.settings?.hybridEcommerce;
     if (settingsHybrid && typeof settingsHybrid === "object") {
@@ -260,7 +286,45 @@ function preserveLocalTemplateHybridMetadata(next: LocalTemplateData, current: L
             ...(next.settings || {}),
             hybridEcommerce: settingsHybrid,
         };
+        delete next.settings[LOCAL_ECOMMERCE_KEY];
+        preservedHybrid = true;
     }
+    if (preservedHybrid) {
+        return;
+    }
+    const local = current.metadata?.[LOCAL_ECOMMERCE_KEY] || current.settings?.[LOCAL_ECOMMERCE_KEY];
+    if (local && typeof local === "object") {
+        next.metadata = {
+            ...(next.metadata || {}),
+            [LOCAL_ECOMMERCE_KEY]: local,
+        };
+    }
+}
+
+function localizeLocalEcommerceNodes(nodes: Array<Record<string, unknown>>) {
+    return nodes.map((node) => {
+        const next = { ...node };
+        const extra = asRecord(next.extra) ? { ...(next.extra as Record<string, unknown>) } : {};
+        const operation = stringValue(next.operation) || stringValue(next.type);
+        const nodeId = stringValue(next.id);
+        if (operation === "material_lookup" || operation === "material") {
+            const assetId = stringValue(extra.assetId);
+            if (!assetId) {
+                extra.assetMode = "auto";
+                extra.materialLibrary = LOCAL_ECOMMERCE_MATERIAL_LIBRARY;
+            } else if (assetId === BUILTIN_PDD_MOCKUP_BASE_ASSET_ID) {
+                extra.assetMode = "fixed";
+                extra.fallback = "builtin_pdd_mockup_base";
+            }
+        }
+        if (operation === "script" && (nodeId === "package" || nodeId === "sync_local")) {
+            extra.executor = "local";
+            extra.localEcommerceAction = nodeId === "package" ? "package" : "sync_local";
+            extra.outputRoot = stringValue(extra.outputRoot) || DEFAULT_ECOMMERCE_PROJECT_OUTPUT_ROOT;
+        }
+        next.extra = extra;
+        return next;
+    });
 }
 
 function hybridRunMetadataFromLocalTemplate(data: LocalTemplateData, payload: StartWorkflowTemplateRunRequest, settings: Record<string, unknown>) {
@@ -277,6 +341,20 @@ function hybridRunMetadataFromLocalTemplate(data: LocalTemplateData, payload: St
         channelId: stringValue(hybrid.channelId),
     };
 }
+
+function localEcommerceRunMetadataFromLocalTemplate(data: LocalTemplateData, payload: StartWorkflowTemplateRunRequest, settings: Record<string, unknown>) {
+    const local = asRecord(data.metadata?.[LOCAL_ECOMMERCE_KEY]) || asRecord(data.settings?.[LOCAL_ECOMMERCE_KEY]);
+    if (!local) return undefined;
+    const profileId = payload.profileId || stringValue(settings.defaultProfileId) || stringValue(settings.profileId) || stringValue(local.profileId);
+    return {
+        backend: stringValue(local.backend) || LOCAL_ECOMMERCE_BACKEND,
+        profileId,
+        channelId: stringValue(local.channelId),
+        materialLibrary: stringValue(local.materialLibrary) || LOCAL_ECOMMERCE_MATERIAL_LIBRARY,
+        projectOutputRoot: stringValue(local.projectOutputRoot) || DEFAULT_ECOMMERCE_PROJECT_OUTPUT_ROOT,
+    };
+}
+
 
 function localSpecFromData(data: LocalTemplateData): WorkflowTemplateSpec {
     const settings = data.settings || {};

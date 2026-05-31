@@ -56,15 +56,18 @@ type HybridEcommerceRunOptions struct {
 	TemplateID    string
 	ProfileID     string
 	ChannelID     string
+	ProjectID     string
 	Input         map[string]any
 }
 
 type HybridEcommerceRunResult struct {
 	Run              Envelope[RunData] `json:"run"`
 	TemplateID       string            `json:"templateId"`
-	RemoteTemplateID string            `json:"remoteTemplateId"`
+	RemoteTemplateID string            `json:"remoteTemplateId,omitempty"`
 	ProfileID        string            `json:"profileId,omitempty"`
 	ChannelID        string            `json:"channelId,omitempty"`
+	ProjectID        string            `json:"projectId,omitempty"`
+	Mode             string            `json:"mode,omitempty"`
 	Warnings         []string          `json:"warnings,omitempty"`
 }
 
@@ -319,6 +322,7 @@ func CreateHybridEcommerceRun(ctx context.Context, opts HybridEcommerceRunOption
 		RemoteTemplateID: config.RemoteTemplateID,
 		ProfileID:        profileID,
 		ChannelID:        channelID,
+		Mode:             hybridEcommerceBackend,
 	}, nil
 }
 

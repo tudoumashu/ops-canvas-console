@@ -32,8 +32,11 @@ type cliOptions struct {
 	RemoteTemplateID string
 	ProfileID        string
 	ChannelID        string
+	ProjectID        string
 	SecretEnv        string
 	InputFile        string
+	LocalExecutable  bool
+	MaterialLibrary  string
 	Command          []string
 }
 
@@ -210,6 +213,33 @@ func runEcommerceCommand(ctx context.Context, opts cliOptions, stdout io.Writer,
 }
 
 func runEcommerceImportTemplate(ctx context.Context, opts cliOptions, stdout io.Writer, stderr io.Writer) int {
+	if opts.LocalExecutable {
+		result, err := localworkspace.ImportLocalEcommerceTemplate(ctx, localworkspace.LocalEcommerceImportOptions{
+			WorkspacePath:       opts.Workspace,
+			BaseURL:             opts.RemoteURL,
+			RemoteTemplateID:    opts.RemoteTemplateID,
+			ProfileID:           opts.ProfileID,
+			ChannelID:           opts.ChannelID,
+			SecretEnv:           opts.SecretEnv,
+			MaterialLibraryPath: opts.MaterialLibrary,
+		})
+		if err != nil {
+			return writeError(stderr, opts.JSON, asCLIError(err))
+		}
+		if opts.JSON {
+			return writeSuccess(stdout, result, result.Warnings)
+		}
+		action := "Updated"
+		if result.Created {
+			action = "Imported"
+		}
+		fmt.Fprintf(stdout, "%s local executable ecommerce template %s\n", action, result.Template.ID)
+		fmt.Fprintf(stdout, "Remote template: %s\n", result.RemoteTemplateID)
+		for _, warning := range result.Warnings {
+			fmt.Fprintf(stderr, "warning: %s\n", warning)
+		}
+		return 0
+	}
 	result, err := localworkspace.ImportHybridEcommerceTemplate(ctx, localworkspace.HybridEcommerceImportOptions{
 		WorkspacePath:    opts.Workspace,
 		BaseURL:          opts.RemoteURL,
@@ -244,11 +274,12 @@ func runEcommerceCreateRun(ctx context.Context, opts cliOptions, stdout io.Write
 	if err != nil {
 		return writeError(stderr, opts.JSON, asCLIError(err))
 	}
-	result, err := localworkspace.CreateHybridEcommerceRun(ctx, localworkspace.HybridEcommerceRunOptions{
+	result, err := localworkspace.CreateEcommerceRun(ctx, localworkspace.HybridEcommerceRunOptions{
 		WorkspacePath: opts.Workspace,
 		TemplateID:    opts.Command[2],
 		ProfileID:     opts.ProfileID,
 		ChannelID:     opts.ChannelID,
+		ProjectID:     opts.ProjectID,
 		Input:         input,
 	})
 	if err != nil {
@@ -259,7 +290,12 @@ func runEcommerceCreateRun(ctx context.Context, opts cliOptions, stdout io.Write
 	}
 	fmt.Fprintf(stdout, "Created ecommerce run %s\n", result.Run.ID)
 	fmt.Fprintf(stdout, "Template: %s\n", result.TemplateID)
-	fmt.Fprintf(stdout, "Remote template: %s\n", result.RemoteTemplateID)
+	if result.RemoteTemplateID != "" {
+		fmt.Fprintf(stdout, "Remote template: %s\n", result.RemoteTemplateID)
+	}
+	if result.Mode != "" {
+		fmt.Fprintf(stdout, "Mode: %s\n", result.Mode)
+	}
 	for _, warning := range result.Warnings {
 		fmt.Fprintf(stderr, "warning: %s\n", warning)
 	}
@@ -868,6 +904,16 @@ func parseArgs(args []string) (cliOptions, error) {
 			opts.RemoteTemplateID = args[i]
 		case strings.HasPrefix(arg, "--remote-template="):
 			opts.RemoteTemplateID = strings.TrimPrefix(arg, "--remote-template=")
+		case arg == "--local-executable":
+			opts.LocalExecutable = true
+		case arg == "--material-library":
+			i++
+			if i >= len(args) {
+				return opts, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "--material-library requires a value", 1, nil)
+			}
+			opts.MaterialLibrary = args[i]
+		case strings.HasPrefix(arg, "--material-library="):
+			opts.MaterialLibrary = strings.TrimPrefix(arg, "--material-library=")
 		case arg == "--profile":
 			i++
 			if i >= len(args) {
@@ -884,6 +930,14 @@ func parseArgs(args []string) (cliOptions, error) {
 			opts.ChannelID = args[i]
 		case strings.HasPrefix(arg, "--channel="):
 			opts.ChannelID = strings.TrimPrefix(arg, "--channel=")
+		case arg == "--project":
+			i++
+			if i >= len(args) {
+				return opts, localworkspace.NewError(localworkspace.ErrorInvalidArgument, "--project requires a value", 1, nil)
+			}
+			opts.ProjectID = args[i]
+		case strings.HasPrefix(arg, "--project="):
+			opts.ProjectID = strings.TrimPrefix(arg, "--project=")
 		case arg == "--secret-env":
 			i++
 			if i >= len(args) {
