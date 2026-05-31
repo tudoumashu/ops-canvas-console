@@ -18,6 +18,12 @@
 - PASS：`python3 -m py_compile tools/local_workspace_browser_smoke.py tools/hybrid_ecommerce_browser_smoke.py tools/hybrid_ecommerce_vps_smoke.py`
   - 确认 smoke helper 语法可用。
 
+## 本轮收口复核
+
+- PASS：再次使用 Docker `golang:1.25-alpine` 运行 `go test ./internal/localworkspace ./cmd/opsc`，确认 executor watch、doctor、hybrid sync 和既有 local workspace 回归仍通过。
+- PASS：再次运行 `python3 -m py_compile tools/local_workspace_browser_smoke.py tools/hybrid_ecommerce_browser_smoke.py tools/hybrid_ecommerce_vps_smoke.py`。
+- FIXED：`docs/local-workspace-regression.md` 中真实 VPS smoke 示例已对齐当前 helper 参数：`--remote-url`、`--remote-template`、`--secret-env`、`--input-file`、`--evidence`。
+
 ## 半自动回归入口
 
 已补 `docs/local-workspace-regression.md`：

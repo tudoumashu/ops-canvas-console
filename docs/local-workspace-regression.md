@@ -58,10 +58,11 @@ python3 tools/hybrid_ecommerce_browser_smoke.py \
 ```bash
 python3 tools/hybrid_ecommerce_vps_smoke.py \
   --workspace ~/OpsCanvas \
-  --base-url <vps-api-base-url> \
-  --template-id <confirmed-template-id> \
-  --token-env <env-name> \
-  --output /tmp/opsc-hybrid-vps-smoke.json
+  --remote-url <vps-api-base-url> \
+  --remote-template <confirmed-template-id> \
+  --secret-env <env-name> \
+  --input-file /path/to/hybrid-input.json \
+  --evidence /tmp/opsc-hybrid-vps-smoke.json
 ```
 
 退出码约定：
