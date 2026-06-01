@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -304,6 +305,456 @@ func TestRunExecutorOnceExecutesLocalEcommerceTemplate(t *testing.T) {
 	}
 	if second.Processed != 0 {
 		t.Fatalf("second executor result = %#v, want no duplicate local ecommerce work", second)
+	}
+}
+
+func TestRunExecutorOnceExecutesLocalEcommerceSourceVariantsPackage(t *testing.T) {
+	t.Setenv("OPSC_EXECUTOR_TEST_KEY", "provider-secret")
+	root := filepath.Join(t.TempDir(), "workspace")
+	workspace, profileID, _ := seedExecutorWorkspace(t, root)
+	projectRoot := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatalf("create project root: %v", err)
+	}
+	project := writeExecutorProject(t, workspace, projectRoot, ProjectCapabilities{FSRead: true, FSWrite: true, ArtifactWrite: true})
+	project.Data.Execution.AllowGlobs = append(project.Data.Execution.AllowGlobs, "runs/**")
+	if err := WriteProject(workspace, nextEnvelopeRevision(project, project.Data)); err != nil {
+		t.Fatalf("WriteProject(runs allow glob) error = %v", err)
+	}
+	materialRoot := filepath.Join(t.TempDir(), "materials")
+	materialDir := filepath.Join(materialRoot, "物语系列", "羽川翼")
+	if err := os.MkdirAll(materialDir, 0o755); err != nil {
+		t.Fatalf("create material dir: %v", err)
+	}
+	imageData, err := base64.StdEncoding.DecodeString(executorTestPNGBase64)
+	if err != nil {
+		t.Fatalf("decode material png: %v", err)
+	}
+	if err := AtomicWriteFile(filepath.Join(materialDir, "reference.png"), imageData, 0o600); err != nil {
+		t.Fatalf("write reference: %v", err)
+	}
+	if err := AtomicWriteFile(filepath.Join(materialDir, "metadata.json"), []byte(`{"work":"物语系列","character":"羽川翼"}`), 0o600); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+
+	var editCalls int
+	var auths []string
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auths = append(auths, r.Header.Get("Authorization"))
+		if r.URL.Path != "/v1/images/edits" {
+			t.Fatalf("provider path = %s, want image edits", r.URL.Path)
+		}
+		if err := r.ParseMultipartForm(16 << 20); err != nil {
+			t.Fatalf("parse multipart: %v", err)
+		}
+		editCalls++
+		if got := r.FormValue("size"); got != localEcommerceImageSize {
+			t.Fatalf("image edit size = %q, want local ecommerce default", got)
+		}
+		if got := r.FormValue("quality"); got != localEcommerceImageQuality {
+			t.Fatalf("image edit quality = %q, want local ecommerce default", got)
+		}
+		if got := r.FormValue("generation_config"); got != "" {
+			t.Fatalf("OpenAI-compatible image edit sent generation_config: %q", got)
+		}
+		if len(r.MultipartForm.File["image"]) != 1 {
+			t.Fatalf("uploaded images = %d, want one reference image", len(r.MultipartForm.File["image"]))
+		}
+		if !strings.Contains(r.FormValue("prompt"), "源图") || !strings.Contains(r.FormValue("prompt"), "1:") {
+			t.Fatalf("edit prompt missing source variant context: %q", r.FormValue("prompt"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"b64_json":"`+executorTestPNGBase64+`"}]}`)
+	}))
+	defer provider.Close()
+
+	profile := readExecutorProfile(t, workspace, profileID)
+	profile.Data.Channels[0].BaseURL = provider.URL
+	if err := WriteProfile(workspace, profile); err != nil {
+		t.Fatalf("WriteProfile() error = %v", err)
+	}
+
+	variants := []map[string]any{
+		{"nodeId": "source_japanese", "label": "日式风格", "fileName": "01-日式风格.png"},
+		{"nodeId": "source_3d", "label": "3D风格", "fileName": "02-3D风格.png"},
+		{"nodeId": "source_korean_semireal", "label": "韩式半写实", "fileName": "03-韩式半写实.png"},
+	}
+	template := writeExecutorTemplate(t, workspace, []map[string]any{
+		{"id": "input", "type": "input", "operation": "input", "title": "Input"},
+		{"id": "reference", "type": "material_lookup", "operation": "material_lookup", "title": "Reference", "extra": map[string]any{"assetMode": "auto", "materialLibrary": localEcommerceMaterialLibrary, "materialLibraryPath": materialRoot}},
+		{"id": "source_japanese", "type": "image_edit", "operation": "image_edit", "title": "日式风格源图", "model": "image-edit-test", "prompt": "日式源图 {{uploaded_image_order}}", "size": localEcommerceImageSize, "quality": localEcommerceImageQuality},
+		{"id": "source_3d", "type": "image_edit", "operation": "image_edit", "title": "3D风格源图", "model": "image-edit-test", "prompt": "3D源图 {{uploaded_image_order}}", "size": localEcommerceImageSize, "quality": localEcommerceImageQuality},
+		{"id": "source_korean_semireal", "type": "image_edit", "operation": "image_edit", "title": "韩式半写实源图", "model": "image-edit-test", "prompt": "韩式源图 {{uploaded_image_order}}", "size": localEcommerceImageSize, "quality": localEcommerceImageQuality},
+		{"id": "package_sources", "type": "script", "operation": "script", "title": "结果文件夹", "extra": map[string]any{"executor": "local", "localEcommerceAction": "package", "localEcommercePackageMode": "source_variants", "sourceVariantRoot": "runs", "sourceVariants": variants}},
+	}, []map[string]any{
+		{"source": "input", "target": "reference"},
+		{"source": "reference", "target": "source_japanese", "inputOrder": 1, "inputAlias": "标准参考图", "fileSelector": "first"},
+		{"source": "reference", "target": "source_3d", "inputOrder": 1, "inputAlias": "标准参考图", "fileSelector": "first"},
+		{"source": "reference", "target": "source_korean_semireal", "inputOrder": 1, "inputAlias": "标准参考图", "fileSelector": "first"},
+		{"source": "source_japanese", "target": "package_sources"},
+		{"source": "source_3d", "target": "package_sources"},
+		{"source": "source_korean_semireal", "target": "package_sources"},
+	})
+	template.Data.Metadata = map[string]any{localEcommerceKey: map[string]any{"backend": localEcommerceBackend, "channelId": "openai", "materialLibraryPath": materialRoot, "projectOutputRoot": "runs"}}
+	if err := WriteTemplate(workspace, nextEnvelopeRevision(template, template.Data)); err != nil {
+		t.Fatalf("WriteTemplate(local ecommerce metadata) error = %v", err)
+	}
+	run := writeExecutorRunWithProject(t, workspace, template.ID, profile.ID, project.ID, RunStatusPending, map[string]any{"productTitle": "羽川翼抱枕", "character": "羽川翼", "theme": "《物语系列》"}, nil)
+	appendWaitingForExecutor(t, workspace, run.ID)
+
+	result, err := RunExecutorOnce(context.Background(), ExecutorOptions{WorkspacePath: root, RunID: run.ID, HTTPClient: provider.Client()})
+	if err != nil {
+		t.Fatalf("RunExecutorOnce() error = %v", err)
+	}
+	if result.Processed != 1 || len(result.Runs) != 1 {
+		t.Fatalf("executor result = %#v, want one processed source variants run", result)
+	}
+	if got := result.Runs[0]; got.Status != RunStatusSuccess || got.Executed != 6 || got.ArtifactRefs != 5 {
+		t.Fatalf("executor result = %#v, want source variants success", result)
+	}
+	if editCalls != 3 {
+		t.Fatalf("editCalls = %d, want three source variants", editCalls)
+	}
+	for _, auth := range auths {
+		if auth != "Bearer provider-secret" {
+			t.Fatalf("provider auth = %q, want secretRef bearer", auth)
+		}
+	}
+	packageRoot := filepath.Join(projectRoot, "runs", localEcommerceRunTimestampFolder(run), "generated", "物语系列 - 羽川翼")
+	for _, rel := range []string{"01-日式风格.png", "02-3D风格.png", "03-韩式半写实.png", "package.json"} {
+		if _, err := os.Stat(filepath.Join(packageRoot, rel)); err != nil {
+			t.Fatalf("source variant output %s missing: %v", rel, err)
+		}
+	}
+	states, err := ListRunNodeStates(workspace, run.ID)
+	if err != nil {
+		t.Fatalf("ListRunNodeStates() error = %v", err)
+	}
+	stateByID := executorTestStateMap(states)
+	outputs := anySliceFromMap(stateByID["package_sources"].Data.Output, "projectOutputs")
+	if len(outputs) != 3 || stringFromMap(stateByID["package_sources"].Data.Output, "packageRoot") != path.Join("runs", localEcommerceRunTimestampFolder(run), "generated", "物语系列 - 羽川翼") {
+		t.Fatalf("package output = %#v, want three source variants in theme-character folder", stateByID["package_sources"].Data.Output)
+	}
+	refs, err := ListRunArtifacts(workspace, run.ID)
+	if err != nil {
+		t.Fatalf("ListRunArtifacts() error = %v", err)
+	}
+	events, err := ReadRunEvents(workspace, run.ID, 0)
+	if err != nil {
+		t.Fatalf("ReadRunEvents() error = %v", err)
+	}
+	for _, event := range events {
+		switch event.Type {
+		case hybridRemoteRunStarted, hybridRemoteRunSynced, hybridRemoteRunCompleted, hybridRemoteRunFailed, "remote.run.dispatched":
+			t.Fatalf("local source variants emitted remote orchestration event %q", event.Type)
+		}
+	}
+	status, err := GetRunStatus(workspace, run.ID)
+	if err != nil {
+		t.Fatalf("GetRunStatus() error = %v", err)
+	}
+	assertNoExecutorSecretLeak(t, status, events, refs)
+	assertNoExecutorRootLeak(t, projectRoot, status, events, refs)
+}
+
+func TestRunExecutorOnceExecutesLocalEcommerceMultiProductTemplate(t *testing.T) {
+	t.Setenv("OPSC_EXECUTOR_TEST_KEY", "provider-secret")
+	root := filepath.Join(t.TempDir(), "workspace")
+	workspace, profileID, _ := seedExecutorWorkspace(t, root)
+	materialRoot := filepath.Join(t.TempDir(), "materials")
+	imageData, err := base64.StdEncoding.DecodeString(executorTestPNGBase64)
+	if err != nil {
+		t.Fatalf("decode material png: %v", err)
+	}
+	for _, item := range []struct {
+		work      string
+		character string
+	}{
+		{work: "物语系列", character: "羽川翼"},
+		{work: "原神", character: "八重神子"},
+	} {
+		materialDir := filepath.Join(materialRoot, item.work, item.character)
+		if err := os.MkdirAll(materialDir, 0o755); err != nil {
+			t.Fatalf("create material dir: %v", err)
+		}
+		if err := AtomicWriteFile(filepath.Join(materialDir, "reference.png"), imageData, 0o600); err != nil {
+			t.Fatalf("write reference: %v", err)
+		}
+		metadata := `{"work":` + strconv.Quote(item.work) + `,"character":` + strconv.Quote(item.character) + `}`
+		if err := AtomicWriteFile(filepath.Join(materialDir, "metadata.json"), []byte(metadata), 0o600); err != nil {
+			t.Fatalf("write metadata: %v", err)
+		}
+	}
+
+	var editCalls int
+	var auths []string
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auths = append(auths, r.Header.Get("Authorization"))
+		if r.URL.Path != "/v1/images/edits" {
+			t.Fatalf("provider path = %s, want image edits", r.URL.Path)
+		}
+		if err := r.ParseMultipartForm(16 << 20); err != nil {
+			t.Fatalf("parse multipart: %v", err)
+		}
+		editCalls++
+		if len(r.MultipartForm.File["image"]) != 1 {
+			t.Fatalf("uploaded images = %d, want one reference image", len(r.MultipartForm.File["image"]))
+		}
+		if !strings.Contains(r.FormValue("prompt"), "抱枕") || !strings.Contains(r.FormValue("prompt"), "1:") {
+			t.Fatalf("edit prompt missing product or image order: %q", r.FormValue("prompt"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"b64_json":"`+executorTestPNGBase64+`"}]}`)
+	}))
+	defer provider.Close()
+
+	profile := readExecutorProfile(t, workspace, profileID)
+	profile.Data.Channels[0].BaseURL = provider.URL
+	if err := WriteProfile(workspace, profile); err != nil {
+		t.Fatalf("WriteProfile() error = %v", err)
+	}
+
+	template := writeExecutorTemplate(t, workspace, []map[string]any{
+		{"id": "input", "type": "input", "operation": "input", "title": "Input"},
+		{"id": "reference", "type": "material_lookup", "operation": "material_lookup", "title": "Reference", "extra": map[string]any{"assetMode": "auto", "materialLibrary": localEcommerceMaterialLibrary, "materialLibraryPath": materialRoot}},
+		{"id": "source", "type": "image_edit", "operation": "image_edit", "title": "Source", "model": "image-edit-test", "prompt": "{{productTitle}} source {{uploaded_image_order}}"},
+	}, []map[string]any{
+		{"source": "input", "target": "reference"},
+		{"source": "reference", "target": "source", "inputOrder": 1, "inputAlias": "角色参考图", "fileSelector": "first"},
+	})
+	template.Data.Metadata = map[string]any{localEcommerceKey: map[string]any{"backend": localEcommerceBackend, "channelId": "openai", "materialLibraryPath": materialRoot}}
+	template.Data.Settings = map[string]any{"productConcurrency": 1}
+	if err := WriteTemplate(workspace, nextEnvelopeRevision(template, template.Data)); err != nil {
+		t.Fatalf("WriteTemplate(local ecommerce metadata) error = %v", err)
+	}
+	run := writeExecutorRun(t, workspace, template.ID, profile.ID, RunStatusPending, map[string]any{
+		"inputs": []map[string]any{
+			{"productTitle": "羽川翼抱枕", "character": "羽川翼", "theme": "物语系列"},
+			{"productTitle": "八重神子抱枕", "character": "八重神子", "theme": "原神"},
+		},
+	}, nil)
+	appendWaitingForExecutor(t, workspace, run.ID)
+
+	result, err := RunExecutorOnce(context.Background(), ExecutorOptions{WorkspacePath: root, RunID: run.ID, HTTPClient: provider.Client()})
+	if err != nil {
+		t.Fatalf("RunExecutorOnce() error = %v", err)
+	}
+	if result.Processed != 1 || len(result.Runs) != 1 {
+		t.Fatalf("executor result = %#v, want one multi-product run", result)
+	}
+	if got := result.Runs[0]; got.Status != RunStatusSuccess || got.Executed != 6 || got.ArtifactRefs != 4 {
+		t.Fatalf("run result = %#v, want two product executions with four artifacts", got)
+	}
+	if editCalls != 2 {
+		t.Fatalf("editCalls = %d, want two product image edits", editCalls)
+	}
+	for _, auth := range auths {
+		if auth != "Bearer provider-secret" {
+			t.Fatalf("provider auth = %q, want secretRef bearer", auth)
+		}
+	}
+	status, err := GetRunStatus(workspace, run.ID)
+	if err != nil {
+		t.Fatalf("GetRunStatus() error = %v", err)
+	}
+	if status.Run.Status != RunStatusSuccess || status.Run.ArtifactCount != 4 {
+		t.Fatalf("run status = %#v, want success with four artifacts", status.Run)
+	}
+	states, err := ListRunNodeStates(workspace, run.ID)
+	if err != nil {
+		t.Fatalf("ListRunNodeStates() error = %v", err)
+	}
+	stateByID := executorTestStateMap(states)
+	for _, nodeID := range []string{"input", "reference", "source"} {
+		state := stateByID[nodeID]
+		if state.Data.Status != RunStatusSuccess || positiveInt(state.Data.Output["success"]) != 2 || positiveInt(state.Data.Output["total"]) != 2 {
+			t.Fatalf("aggregate state %s = %#v, want two successful products", nodeID, state.Data)
+		}
+	}
+	for _, scoped := range []string{
+		productScopedNodeID("product_001", "source"),
+		productScopedNodeID("product_002", "source"),
+	} {
+		if stateByID[scoped].Data.Status != RunStatusSuccess {
+			t.Fatalf("scoped state %s = %#v, want success", scoped, stateByID[scoped].Data)
+		}
+	}
+	refs, err := ListRunArtifacts(workspace, run.ID)
+	if err != nil {
+		t.Fatalf("ListRunArtifacts() error = %v", err)
+	}
+	seenProducts := map[string]bool{}
+	for _, ref := range refs {
+		productKey := stringFromMap(ref.Ref.Metadata, "productKey")
+		if productKey == "" || stringFromMap(ref.Ref.Metadata, "templateNodeId") == "" {
+			t.Fatalf("ref metadata = %#v, want productKey and templateNodeId", ref.Ref.Metadata)
+		}
+		seenProducts[productKey] = true
+	}
+	if !seenProducts["product_001"] || !seenProducts["product_002"] {
+		t.Fatalf("ref products = %#v, want refs for both products", seenProducts)
+	}
+	events, err := ReadRunEvents(workspace, run.ID, 0)
+	if err != nil {
+		t.Fatalf("ReadRunEvents() error = %v", err)
+	}
+	for _, want := range []string{"executor.product.started", "executor.product.completed", executorEventRunCompleted} {
+		if !runEventTypesContain(events, want) {
+			t.Fatalf("events missing %s: %#v", want, events)
+		}
+	}
+	for _, event := range events {
+		switch event.Type {
+		case hybridRemoteRunStarted, hybridRemoteRunSynced, hybridRemoteRunCompleted, hybridRemoteRunFailed, "remote.run.dispatched":
+			t.Fatalf("local multi-product ecommerce emitted remote orchestration event %q", event.Type)
+		}
+	}
+	assertNoExecutorSecretLeak(t, status, events, refs)
+}
+
+func TestRunExecutorOnceStopsRetryingLocalEcommerceConfigErrors(t *testing.T) {
+	t.Setenv("OPSC_EXECUTOR_TEST_KEY", "provider-secret")
+	root := filepath.Join(t.TempDir(), "workspace")
+	workspace, profileID, assetID := seedExecutorWorkspace(t, root)
+	template := writeExecutorTemplate(t, workspace, []map[string]any{
+		{"id": "input", "type": "input", "operation": "input", "title": "Input"},
+		{"id": "reference", "type": "material_lookup", "operation": "material_lookup", "title": "Reference", "extra": map[string]any{"assetMode": "fixed", "assetId": assetID}},
+		{"id": "source", "type": "image_edit", "operation": "image_edit", "title": "Source", "model": "image-edit-test", "prompt": "{{productTitle}} source {{uploaded_image_order}}", "retry": map[string]any{"enabled": true, "retryCount": 0, "intervalSeconds": 0}},
+	}, []map[string]any{
+		{"source": "reference", "target": "source", "inputOrder": 1, "inputAlias": "角色参考图", "fileSelector": "first"},
+	})
+	template.Data.Metadata = map[string]any{localEcommerceKey: map[string]any{"backend": localEcommerceBackend, "channelId": "missing-channel"}}
+	if err := WriteTemplate(workspace, nextEnvelopeRevision(template, template.Data)); err != nil {
+		t.Fatalf("WriteTemplate(local ecommerce metadata) error = %v", err)
+	}
+	run := writeExecutorRun(t, workspace, template.ID, profileID, RunStatusPending, map[string]any{"productTitle": "配置错误抱枕"}, nil)
+	appendWaitingForExecutor(t, workspace, run.ID)
+
+	result, err := RunExecutorOnce(context.Background(), ExecutorOptions{WorkspacePath: root, RunID: run.ID})
+	if err != nil {
+		t.Fatalf("RunExecutorOnce() error = %v", err)
+	}
+	if result.Processed != 1 || len(result.Runs) != 1 {
+		t.Fatalf("executor result = %#v, want one failed run", result)
+	}
+	if got := result.Runs[0]; got.Status != RunStatusError || !strings.Contains(got.Error, "profile has no usable ai channel") {
+		t.Fatalf("run result = %#v, want nonretryable profile channel error", got)
+	}
+	events, err := ReadRunEvents(workspace, run.ID, 0)
+	if err != nil {
+		t.Fatalf("ReadRunEvents() error = %v", err)
+	}
+	if runEventTypesContain(events, executorEventNodeRetrying) {
+		t.Fatalf("events contain retrying marker for config error: %#v", events)
+	}
+}
+
+func TestRunExecutorOnceDoesNotRetryProviderClientErrorForever(t *testing.T) {
+	t.Setenv("OPSC_EXECUTOR_TEST_KEY", "provider-secret")
+	root := filepath.Join(t.TempDir(), "workspace")
+	workspace, profileID, assetID := seedExecutorWorkspace(t, root)
+	var calls int
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"error":{"message":"endpoint not found"}}`)
+	}))
+	defer provider.Close()
+	profile := readExecutorProfile(t, workspace, profileID)
+	profile.Data.Channels = []ProfileChannel{{
+		ID:        "edits",
+		Protocol:  "openai-compatible",
+		BaseURL:   provider.URL,
+		Enabled:   true,
+		SecretRef: &SecretRef{Type: SecretRefTypeEnv, Name: "OPSC_EXECUTOR_TEST_KEY"},
+	}}
+	if err := WriteProfile(workspace, profile); err != nil {
+		t.Fatalf("WriteProfile() error = %v", err)
+	}
+	template := writeExecutorTemplate(t, workspace, []map[string]any{
+		{"id": "reference", "type": "material_lookup", "operation": "material_lookup", "title": "Reference", "extra": map[string]any{"assetMode": "fixed", "assetId": assetID}},
+		{"id": "source", "type": "image_edit", "operation": "image_edit", "title": "Source", "model": "image-edit-test", "prompt": "source {{uploaded_image_order}}", "retry": map[string]any{"enabled": true, "retryCount": 0, "intervalSeconds": 0}},
+	}, []map[string]any{
+		{"source": "reference", "target": "source", "inputOrder": 1, "inputAlias": "角色参考图", "fileSelector": "first"},
+	})
+	template.Data.Metadata = map[string]any{localEcommerceKey: map[string]any{"backend": localEcommerceBackend, "channelId": "edits"}}
+	if err := WriteTemplate(workspace, nextEnvelopeRevision(template, template.Data)); err != nil {
+		t.Fatalf("WriteTemplate(local ecommerce metadata) error = %v", err)
+	}
+	run := writeExecutorRun(t, workspace, template.ID, profileID, RunStatusPending, map[string]any{"productTitle": "错误重试测试"}, nil)
+	appendWaitingForExecutor(t, workspace, run.ID)
+
+	result, err := RunExecutorOnce(context.Background(), ExecutorOptions{WorkspacePath: root, RunID: run.ID, HTTPClient: provider.Client()})
+	if err != nil {
+		t.Fatalf("RunExecutorOnce() error = %v", err)
+	}
+	if result.Processed != 1 || len(result.Runs) != 1 || result.Runs[0].Status != RunStatusError {
+		t.Fatalf("executor result = %#v, want failed run", result)
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want one nonretryable 4xx call", calls)
+	}
+	events, err := ReadRunEvents(workspace, run.ID, 0)
+	if err != nil {
+		t.Fatalf("ReadRunEvents() error = %v", err)
+	}
+	if runEventTypesContain(events, executorEventNodeRetrying) {
+		t.Fatalf("events contain retrying marker for provider 4xx: %#v", events)
+	}
+}
+
+func TestRunExecutorOnceTimesOutSlowOpenAIImageRequest(t *testing.T) {
+	t.Setenv("OPSC_EXECUTOR_TEST_KEY", "provider-secret")
+	oldTimeout := executorAIImageRequestTimeout
+	executorAIImageRequestTimeout = 20 * time.Millisecond
+	defer func() { executorAIImageRequestTimeout = oldTimeout }()
+
+	root := filepath.Join(t.TempDir(), "workspace")
+	workspace, profileID, assetID := seedExecutorWorkspace(t, root)
+	var calls int
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		time.Sleep(200 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"b64_json":"`+executorTestPNGBase64+`"}]}`)
+	}))
+	defer provider.Close()
+	profile := readExecutorProfile(t, workspace, profileID)
+	profile.Data.Channels[0].BaseURL = provider.URL
+	if err := WriteProfile(workspace, profile); err != nil {
+		t.Fatalf("WriteProfile() error = %v", err)
+	}
+	template := writeExecutorTemplate(t, workspace, []map[string]any{
+		{"id": "reference", "type": "material_lookup", "operation": "material_lookup", "title": "Reference", "extra": map[string]any{"assetMode": "fixed", "assetId": assetID}},
+		{"id": "source", "type": "image_edit", "operation": "image_edit", "title": "Source", "model": "image-edit-test", "prompt": "source {{uploaded_image_order}}", "retry": map[string]any{"enabled": false}},
+	}, []map[string]any{
+		{"source": "reference", "target": "source", "inputOrder": 1, "inputAlias": "角色参考图", "fileSelector": "first"},
+	})
+	run := writeExecutorRun(t, workspace, template.ID, profileID, RunStatusPending, map[string]any{"productTitle": "超时测试"}, nil)
+	appendWaitingForExecutor(t, workspace, run.ID)
+
+	startedAt := time.Now()
+	result, err := RunExecutorOnce(context.Background(), ExecutorOptions{WorkspacePath: root, RunID: run.ID, HTTPClient: provider.Client()})
+	elapsed := time.Since(startedAt)
+	if err != nil {
+		t.Fatalf("RunExecutorOnce() error = %v", err)
+	}
+	if result.Processed != 1 || len(result.Runs) != 1 || result.Runs[0].Status != RunStatusError {
+		t.Fatalf("executor result = %#v, want timed-out failed run", result)
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want one call with retry disabled", calls)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("slow image request elapsed = %s, want executor-side timeout", elapsed)
+	}
+	events, err := ReadRunEvents(workspace, run.ID, 0)
+	if err != nil {
+		t.Fatalf("ReadRunEvents() error = %v", err)
+	}
+	if data, _ := json.Marshal(events); strings.Contains(string(data), provider.URL) {
+		t.Fatalf("timeout events leaked provider URL: %s", data)
 	}
 }
 

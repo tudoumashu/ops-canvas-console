@@ -87,7 +87,13 @@ export default function PromptsPage() {
     const [editingPublicPrompt, setEditingPublicPrompt] = useState<Prompt | null>(null);
     const [publicPromptFormOpen, setPublicPromptFormOpen] = useState(false);
 
-    const { query, items: promptItems, tags: promptTags, facets, total: totalPrompts } = usePromptList({
+    const {
+        query,
+        items: promptItems,
+        tags: promptTags,
+        facets,
+        total: totalPrompts,
+    } = usePromptList({
         keyword: libraryKeyword,
         tags: libraryTags,
         category: librarySource,
@@ -109,7 +115,16 @@ export default function PromptsPage() {
         });
     }, [mineKeyword, mineMedia, minePrompts, minePurpose, mineSource, mineTags]);
     const mineAvailableTags = useMemo(() => sortedUnique(minePrompts.filter((prompt) => !mineMedia || prompt.domain === mineMedia).flatMap((prompt) => prompt.tags || [])), [mineMedia, minePrompts]);
-    const mineAvailableStages = useMemo(() => sortedUnique(minePrompts.filter((prompt) => !mineMedia || prompt.domain === mineMedia).map((prompt) => prompt.stage).filter(Boolean)), [mineMedia, minePrompts]);
+    const mineAvailableStages = useMemo(
+        () =>
+            sortedUnique(
+                minePrompts
+                    .filter((prompt) => !mineMedia || prompt.domain === mineMedia)
+                    .map((prompt) => prompt.stage)
+                    .filter(Boolean),
+            ),
+        [mineMedia, minePrompts],
+    );
     const mineSourceOptions = useMemo(() => [{ label: "全部来源", value: "" }, ...sortedUnique(minePrompts.map((prompt) => prompt.source)).map((source) => ({ label: promptSourceLabel(source), value: source }))], [minePrompts]);
     const librarySourceOptions = useMemo(() => [{ label: "全部来源", value: ALL_PROMPTS_OPTION }, ...(facets?.categories || []).map((category) => ({ label: promptSourceLabel(category), value: category }))], [facets?.categories]);
 
@@ -192,7 +207,16 @@ export default function PromptsPage() {
 
     const openEditPublicPrompt = (prompt: Prompt) => {
         setEditingPublicPrompt(prompt);
-        publicForm.setFieldsValue({ title: prompt.title, prompt: prompt.prompt, coverUrl: prompt.coverUrl, tags: prompt.tags || [], domain: prompt.domain || "image", stage: prompt.stage || "general", source: prompt.category || "manual-prompts", note: "" });
+        publicForm.setFieldsValue({
+            title: prompt.title,
+            prompt: prompt.prompt,
+            coverUrl: prompt.coverUrl,
+            tags: prompt.tags || [],
+            domain: prompt.domain || "image",
+            stage: prompt.stage || "general",
+            source: prompt.category || "manual-prompts",
+            note: "",
+        });
         setPublicPromptFormOpen(true);
     };
 
@@ -262,7 +286,10 @@ export default function PromptsPage() {
 
     return (
         <div className="flex h-full flex-col overflow-hidden bg-background text-stone-800 dark:text-stone-100">
-            <main className="min-h-0 flex-1 overflow-y-auto bg-background bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] px-6 py-8 [background-size:16px_16px] dark:bg-[radial-gradient(rgba(245,245,244,.16)_1px,transparent_1px)]" onScroll={handleListScroll}>
+            <main
+                className="min-h-0 flex-1 overflow-y-auto bg-background bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] px-6 py-8 [background-size:16px_16px] dark:bg-[radial-gradient(rgba(245,245,244,.16)_1px,transparent_1px)]"
+                onScroll={handleListScroll}
+            >
                 <div className="pb-8">
                     <div className="mx-auto max-w-5xl text-center">
                         <h1 className="text-4xl font-semibold tracking-tight text-stone-950 dark:text-stone-100">提示词中心</h1>
@@ -280,8 +307,8 @@ export default function PromptsPage() {
                                 children: (
                                     <div className="space-y-4">
                                         <LocalWorkspaceStatusAlert message="我的提示词现在以本地工作区为事实源" />
-                                        {promptsError && localWorkspaceStatus === "connected" ? <Alert type="error" showIcon message={promptsError} /> : null}
-                                        {localWorkspace ? <Alert type="info" showIcon message={`当前工作区：${localWorkspace.name}`} /> : null}
+                                        {promptsError && localWorkspaceStatus === "connected" ? <Alert type="error" showIcon title={promptsError} /> : null}
+                                        {localWorkspace ? <Alert type="info" showIcon title={`当前工作区：${localWorkspace.name}`} /> : null}
                                         <PromptLibrarySection
                                             keyword={mineKeyword}
                                             setKeyword={setMineKeyword}
@@ -317,7 +344,11 @@ export default function PromptsPage() {
                                                 </>
                                             )}
                                             headerAction={
-                                                <button type="button" className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300" onClick={openCreateMinePrompt}>
+                                                <button
+                                                    type="button"
+                                                    className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
+                                                    onClick={openCreateMinePrompt}
+                                                >
                                                     新增提示词
                                                 </button>
                                             }
@@ -372,7 +403,11 @@ export default function PromptsPage() {
                                         )}
                                         headerAction={
                                             isAdmin ? (
-                                                <button type="button" className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300" onClick={openCreatePublicPrompt}>
+                                                <button
+                                                    type="button"
+                                                    className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
+                                                    onClick={openCreatePublicPrompt}
+                                                >
                                                     新增提示词
                                                 </button>
                                             ) : null
@@ -419,7 +454,16 @@ export default function PromptsPage() {
                 </Form>
             </Modal>
 
-            <Modal title={editingPublicPrompt ? "编辑提示词库提示词" : "新增提示词库提示词"} open={publicPromptFormOpen} width={820} onCancel={() => setPublicPromptFormOpen(false)} onOk={() => void savePublicPrompt()} okText="保存" cancelText="取消" destroyOnHidden>
+            <Modal
+                title={editingPublicPrompt ? "编辑提示词库提示词" : "新增提示词库提示词"}
+                open={publicPromptFormOpen}
+                width={820}
+                onCancel={() => setPublicPromptFormOpen(false)}
+                onOk={() => void savePublicPrompt()}
+                okText="保存"
+                cancelText="取消"
+                destroyOnHidden
+            >
                 <Form form={publicForm} layout="vertical" requiredMark={false} initialValues={{ domain: "image", stage: "general", tags: [], source: "manual-prompts" }}>
                     <Form.Item name="title" label="标题" rules={[{ required: true, message: "请输入标题" }]}>
                         <Input />
@@ -551,7 +595,10 @@ function MediaFilterSidebar({ value, onChange }: { value: MediaFilter; onChange:
                     <button
                         key={option.value || "all"}
                         type="button"
-                        className={cn("block w-full rounded-md px-3 py-1.5 text-left text-sm transition hover:bg-stone-100 dark:hover:bg-stone-800", value === option.value && "bg-stone-200 font-medium text-stone-950 dark:bg-stone-800 dark:text-stone-100")}
+                        className={cn(
+                            "block w-full rounded-md px-3 py-1.5 text-left text-sm transition hover:bg-stone-100 dark:hover:bg-stone-800",
+                            value === option.value && "bg-stone-200 font-medium text-stone-950 dark:bg-stone-800 dark:text-stone-100",
+                        )}
                         onClick={() => onChange(option.value as MediaFilter)}
                     >
                         {option.label}

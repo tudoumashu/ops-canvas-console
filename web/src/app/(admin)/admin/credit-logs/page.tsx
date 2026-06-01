@@ -92,13 +92,20 @@ export default function AdminCreditLogsPage() {
 
     return (
         <main style={{ padding: 24 }}>
-            <Space direction="vertical" size={16} style={{ width: "100%" }}>
+            <Space orientation="vertical" size={16} style={{ width: "100%" }}>
                 <Card variant="borderless">
                     <Form layout="vertical">
                         <Row gutter={16} align="bottom">
                             <Col flex="360px">
                                 <Form.Item label="关键词">
-                                    <Input.Search value={keywordText} placeholder="搜索用户 ID、类型、备注或关联 ID" allowClear enterButton={<SearchOutlined />} onSearch={() => searchLogs(keywordText)} onChange={(event) => setKeywordText(event.target.value)} />
+                                    <Input.Search
+                                        value={keywordText}
+                                        placeholder="搜索用户 ID、类型、备注或关联 ID"
+                                        allowClear
+                                        enterButton={<SearchOutlined />}
+                                        onSearch={() => searchLogs(keywordText)}
+                                        onChange={(event) => setKeywordText(event.target.value)}
+                                    />
                                 </Form.Item>
                             </Col>
                             <Col flex="none">

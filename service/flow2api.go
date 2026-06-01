@@ -163,6 +163,10 @@ func flow2APIImageRatioSuffix(value string) string {
 		return "four-three"
 	case "3:4", "three-four":
 		return "three-four"
+	case "2:3", "9:16":
+		return "portrait"
+	case "3:2", "16:9":
+		return "landscape"
 	case "portrait":
 		return "portrait"
 	case "landscape":

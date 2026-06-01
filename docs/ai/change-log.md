@@ -1,5 +1,69 @@
 # AI 项目记忆变更记录
 
+## 2026-06-01 | Local ecommerce image timeout and low-latency preset | commit: pending
+
+- 目标：排查本地电商工作流创建后长期停在 `pending` / `running` 的原因，并用真实模型 API 跑通 `电商商品源图生成` 模板。
+- 变更：executor 对图片类本地 AI 请求设置 120 秒上限；OpenAI-compatible 图片参数会归一化到像素尺寸并移除不兼容字段；失败事件会脱敏上游 URL；当前已确认电商模板的三路 `image_edit` 节点切到 `quality=low`、`size=1024x1024` 和紧凑 prompt。
+- 原因：Web UI 只创建 local run，不启动 executor；同时原模板的高质量纵向长 prompt 会让 `gpt-image-2` 链路接近或超过 120 秒，导致用户误以为任务没有反应。
+- 验证：已用 Docker `golang:1.25-alpine` 执行 `gofmt` 和 `GOPROXY=https://goproxy.cn,direct go test ./internal/localworkspace ./cmd/opsc`；已重新构建并安装 `/home/shiyi/.local/bin/opsc`；真实输入 `{"character":"八重神子","theme":"《原神》","presentation":"feminine"}` 跑通 `run_01KSZSZ4WJ0V7C5XNWNG633VVD`，6 个节点全部 `success`，5 个 artifact ref，三张源图分别约 116s/48s/56s 完成。
+- 影响：只收口当前已确认 local-first 电商模板的图片请求稳定性和错误脱敏；不改变 VPS/hybrid fallback、不迁移历史 run、不扩大 MCP 写面。
+- 风险：低延迟 preset 会牺牲一部分画质和构图尺寸；后续需要把质量/尺寸/prompt preset 做成模板级可视化配置，并在常用浏览器确认整体画布和 artifact 预览。
+- 后续：用户通过 Web UI 启动本地 run 时仍需保持 `opsc executor --watch` 运行，否则 run 会停留在 `pending`，只能由后续 executor 接管。
+
+## 2026-06-01 | Local template editor script node type guard | commit: pending
+
+- 目标：修复本地电商模板详情页打开后出现 “This page couldn't load” 的问题。
+- 变更：模板编辑器 `normalizeSpec` 会按 `operation` 归一节点类型，`input`/`condition`/`script`/文本类节点统一渲染为 `text`，图片/视频/素材操作分别渲染为对应支持类型；当前 workspace 模板 `tpl_01KSZF9PKFRXFDDSVTZV8CTD2C` 中 `package_sources` 已从非法 `type=script` 修正为 `type=text, operation=script`。
+- 原因：前端画布节点元数据只支持 `material/text/image/video`，非法 `type=script` 会导致 `nodeTypeMeta[node.type]` 为空并在渲染模板节点卡片时崩溃。
+- 验证：已运行 `cd web && npx tsc --noEmit`、`cd web && API_BASE_URL=http://127.0.0.1:8080 npm run build`、`git diff --check`；已重启 `next start`，模板页 HTTP 返回 200，local template API 返回 6 个合法节点类型。
+- 影响：只增强前端加载容错并修正当前本地 template 数据，不改变 executor、workspace schema、VPS/hybrid 路径或 MCP 写面。
+
+## 2026-06-01 | Local ecommerce source variants and VPS-style run graph | commit: pending
+
+- 目标：把本地 run 画布结果默认对齐 VPS 商品流程画布，并把当前本地电商模板改成三路 prompt 源图生成。
+- 变更：本地 `run_` 进入 `PDDRunCanvasPage` 时默认使用商品流程图视图；local PDD 节点摘要优先显示输入 JSON、素材匹配、输出文件和项目输出数量；executor 的 local ecommerce `package` 动作新增显式 `source_variants` 模式，可把多个上游源图 artifact 写入项目相对 `runs/<timestamp>/generated/<theme> - <character>` 并生成 manifest。当前 workspace 模板 `tpl_01KSZF9PKFRXFDDSVTZV8CTD2C` 已改成 `input/reference + 日式/3D/韩式半写实 image_edit + package_sources`，第四个空 prompt 未启用。
+- 验证：已用 Docker `golang:1.25-alpine` 执行 `gofmt` 和 `GOPROXY=https://goproxy.cn,direct go test ./internal/localworkspace ./cmd/opsc`；已对本地 workspace 执行 `workspace index rebuild`；真实 smoke 已确认素材匹配成功，第一张真实 `image_edit` 等待上游过久后被中止，run 以 `context canceled` 结束。
+- 影响：只新增 local ecommerce source variants package 分支，不改变旧 mockup/main/package 行为，不触发 VPS run orchestration，不扩大 MCP 写面。
+- 风险：三路真实模型生成还没有完成端到端成功验证，需要在用户本地浏览器 + `opsc executor --watch` 中重跑低成本 smoke；第四个 prompt 文件为空，后续补内容后再扩展到四路。
+
+## 2026-05-31 | Local PDD creative canvas layout repair | commit: pending
+
+- 目标：修复本地 PDD “创作画布”中节点互相重叠且没有连线的问题，恢复接近 VPS 总体画布的 artifact DAG 展示。
+- 变更：`opsc serve` 的 local creative-canvas API 不再直接返回旧保存画布，而是先用当前 product detail 和 template DAG 生成标准 artifact 节点/边，再与已保存画布合并；当旧保存画布缺边或存在节点碰撞时，会按真实图片/视频/文本节点尺寸重新布局并补齐连线；图片 artifact 会从 canonical artifact file 读取真实尺寸并写入节点 metadata，避免前端二次探测后放大造成重叠。
+- 原因：旧保存画布中存在 `edges: []` 和按旧 fallback 尺寸计算的位置，前端按真实媒体尺寸渲染后把节点放大到互相遮挡，且没有任何 connection path。
+- 验证：已用 Docker `golang:1.25-alpine` 执行 `gofmt`、`GOPROXY=https://goproxy.cn,direct go test ./internal/localworkspace ./cmd/opsc` 和 `go build ./cmd/opsc`；已重启本机 `opsc serve`；API 对当前 run `run_01KSZ6F3JPM3JBAHG0QEC6P662` 返回 8 个节点、9 条边、0 个重叠。真实浏览器中的工具栏/拖拽保存仍保留为人工 spot check。
+- 影响：只影响 local PDD creative-canvas 数据生成/修复和相关 Go 回归测试；不改旧云端/后台/PDD VPS run 语义，不迁移历史 VPS run，不扩大 MCP 写面。
+- 风险：真实媒体按尺寸展开后画布会更宽，用户仍需要平移/缩放查看右侧节点；节点工具栏的细节交互和手动拖拽保存仍需要常用浏览器 spot check。
+- 后续：继续保留旧保存画布的非破坏性合并原则，后续若增加更多 artifact 类型，应先给后端提供真实尺寸并让布局预留空间。
+
+## 2026-05-31 | Local ecommerce PDD canvas restore and real API smoke | commit: pending
+
+- 目标：把本地电商 run 详情页恢复成 VPS PDD 那种总体画布视图，并用真实 API 把当前已确认模板跑通。
+- 变更：本地 `run_` 详情页通过 `PDDLocalRunClientPage` 复用 `PDDRunCanvasPage`，新增/使用 `opsc serve` 的 local PDD overview、product-detail 和 creative-canvas 数据映射；executor 图片生成/编辑请求会把 `1k/2k/4k` 和比例尺寸归一化成当前上游可接受的像素尺寸；当前 workspace 模板和 profile 切到 ChatGPT2API `openai` 通道，避免继续依赖当前无可用 token 的 Flow2API 图片链路。
+- 原因：旧页面显示的是本地 run 状态表，不符合用户希望的 VPS 总体画布体验；当前 Flow2API tunnel 可达但上游 token 不可用，真实链路需要先走已验证可用的 ChatGPT2API / `gpt-image-2`。
+- 验证：已用真实 ChatGPT2API 链路执行 run `run_01KSZ6F3JPM3JBAHG0QEC6P662` 到 `success`，8 个节点全部 `success`、7 个 artifact ref；已运行 Docker `go test ./internal/localworkspace ./cmd/opsc`、Docker `go build ./cmd/opsc`、`cd web && npx tsc --noEmit`、`API_BASE_URL=http://127.0.0.1:8080 npm run build`；已重启本机 `opsc serve` 和 `next start`，并用 Playwright 确认 `/workflows/ecommerce/run_...` 显示整体 DAG 画布且旧状态表标记不存在。
+- 影响：只影响 local workspace 电商/PDD 本地 run 展示映射、executor 图片请求参数归一化和本机 workspace/profile 配置；不迁移旧 PDD/VPS run，不扩大 MCP 写面，不把远端 token 写入 repo 或浏览器。
+- 风险：Flow2API 上游当前仍需要刷新/补充可用 token 后才能作为图片模型链路；用户常用浏览器会话里的节点点击、商品详情、创作画布和 artifact 预览仍需人工 spot check。
+- 后续：继续以 local workspace 为事实源，优先补真实长期 workspace 下的整体画布交互回归和 worker/watch 稳定性；不要先迁移历史 VPS run 或扩大 MCP 写能力。
+
+## 2026-05-31 | Local cloud model channels imported from VPS | commit: pending
+
+- 目标：让本机部署直接使用 VPS 已部署画布项目中的 ChatGPT2API / Flow2API 云端模型渠道，避免要求浏览器保存模型密钥。
+- 变更：从 VPS `settings` 表导入两个私有渠道到本机 `data/infinite-canvas.db`，保留公开模型列表和默认模型；前端默认 `channelMode` 从 `local` 改为 `remote`，新会话优先使用后端云端渠道；上一轮占用 3000 端口的后台 `next start` 已停止，避免用户再次运行 `npm run local:prod` 时遇到 `EADDRINUSE`。
+- 原因：云端渠道由 Go 后端 `settings.private.channels` 按模型名选择和代理，密钥不应进入浏览器；local workspace 的 profile/`secretRef` 本地直连路径仍保留为可选模式。
+- 验证：本机 DB 导入后 `/api/settings` 返回 178 个公开模型，本机 DB 显示 2 个私有渠道且均有密钥；临时导出文件已删除；已释放 3000 端口；已运行 `cd web && npx tsc --noEmit`、`git diff --check`、Wiki `lint_wiki.sh` / `reindex_qmd.sh llm-wiki` / `qmd embed`。
+- 影响：修改本机 ignored SQLite 数据库和 Web 默认配置；不改 workspace schema、VPS 数据、Go API 语义、executor、MCP 写面或历史 run。
+- 风险：未做真实模型 live call；仍需用低成本文本/图片请求确认当前上游额度和模型可用性。
+
+## 2026-05-31 | Local Web production mode and AntD v6 warning cleanup | commit: pending
+
+- 目标：修复本地部署使用时页面切换卡顿和 Next dev overlay Issues 干扰，恢复接近线上浏览的流畅度。
+- 变更：`web/package.json` 新增 `local:dev` / `local:prod` 两个入口，日常本地使用走 `next build && next start`，开发热更新保留 `next dev --webpack`；清理已确认的 Ant Design v6 deprecated API 使用点，包括 `Alert.message`、`Space.direction`、`Modal.destroyOnClose`、`Input/InputNumber addonBefore/addonAfter` 和底部 `Drawer.height`；同步 README、`docs/opsc-installation.md` 和 `docs/pending-test.md`。
+- 原因：本轮日志显示慢切页主要来自 `next dev --webpack` 的按需编译，多个路由首次进入耗时 5-11 秒，实际 application-code 多数为几十到一百毫秒；左下角 Issues 来自 AntD deprecation warning，不是 local workspace API 失败。
+- 验证：已运行 `cd web && npx tsc --noEmit`、`cd web && npm run build`、`git diff --check`；已把本机 3000 从 `next dev` 切到 `next start`，主要路由 `curl` 返回约 8-21ms。
+- 影响：不改 workspace schema、Go API、executor、VPS/hybrid/local-first workflow 语义或用户数据；生产本地模式下不会显示 Next dev overlay，开发模式仍保留首次按需编译特性。
+- 风险：真实浏览器交互流畅度仍需用户在常用页面间手动切换确认；dev 模式无法完全消除 webpack 首次编译等待。
+
 ## 2026-05-31 | Local ecommerce material path hardening | commit: pending
 
 - 目标：收口已确认电商模板 local-first 路径，避免代码里固化个人机器的 `anime_ip` 素材库绝对路径。

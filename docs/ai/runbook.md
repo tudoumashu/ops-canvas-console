@@ -57,6 +57,7 @@ OPSC_HYBRID_SECRET_ENV
 - Backend API 默认监听 `:8080`。
 - Frontend dev server 默认监听 `0.0.0.0:3000`。
 - 默认数据库是 SQLite：`data/infinite-canvas.db`。
+- 本机“云端渠道”模型配置来自 `settings` 表：`public` 行只给浏览器公开模型列表和默认模型，`private.channels` 保存后端代理使用的渠道配置。当前本机部署已从 VPS 已部署画布项目导入 `VPS ChatGPT2API` 和 `VPS Flow2API` 两个渠道；密钥和上游地址只应存在 ignored SQLite 数据库，不写入浏览器持久化、repo 文档或默认 CLI 输出。
 - Docker 默认挂载 `./data:/app/data`。
 - PDD console 需要 VPS 或本机存在 `/opt/pdd-workflow` 和可选 `/opt/pdd-venv`。
 
@@ -79,6 +80,20 @@ go run .
 ```bash
 cd web
 API_BASE_URL=http://127.0.0.1:8080 bun run dev
+```
+
+本地日常使用 Web UI 时优先跑生产本地模式，避免 `next dev --webpack` 页面首次进入或切换时按需编译：
+
+```bash
+cd web
+API_BASE_URL=http://127.0.0.1:8080 npm run local:prod
+```
+
+需要热更新开发时再跑：
+
+```bash
+cd web
+API_BASE_URL=http://127.0.0.1:8080 npm run local:dev
 ```
 
 Docker 本地构建：
@@ -140,7 +155,7 @@ go run ./cmd/opsc mcp --workspace ~/OpsCanvas
 
 `opsc executor` 是当前唯一正式本地 workflow executor 入口。开发期可直接用 `go run ./cmd/opsc executor --workspace ~/OpsCanvas` 跑一次，也可加 `--run <run_id>` 限定单个 run；Web UI 本地 run 需要常驻 worker 时使用 `go run ./cmd/opsc executor --workspace ~/OpsCanvas --watch --poll-interval 5s`。watch 模式在 workspace 外 XDG state 写 `executor.json` / `executor.pid` 并持有 `executor.watch.lock`，`workspace doctor` 会报告 active/stale/not running 状态。它只处理带 `run.waiting_for_executor` 的 pending run 或已由 executor 接管的 running run；支持固定本地素材 `material_lookup`、`text_generation`、`image_generation`、最小 `input/text_static` 辅助节点、project-aware `condition`/`script`，以及单条已确认电商模板的 hybrid VPS backend。模型调用和 hybrid Web/watch credential 都通过 workspace profile 的 `secretRef` 解析 env/file secret，不从浏览器读取 API key 或 VPS token，也不迁移 PDD/VPS run。
 
-`opsc` 本地安装、Linux `systemd --user` 自启动和 smoke helper 回归入口见 `docs/opsc-installation.md` 与 `docs/local-workspace-regression.md`。
+`opsc` 本地安装、Linux `systemd --user` 自启动和 smoke helper 回归入口见 `docs/opsc-installation.md` 与 `docs/local-workspace-regression.md`。本机正式 CLI 入口固定为 `~/.local/bin/opsc`；临时调试名应只作为兼容链接指向该二进制，避免 executor/serve 使用不同版本。
 
 Phase 13 本机回归已在隔离长期 workspace 和非临时浏览器 profile 上跑通：
 

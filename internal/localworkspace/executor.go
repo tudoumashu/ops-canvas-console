@@ -16,6 +16,7 @@ import (
 	_ "image/jpeg"
 	"image/png"
 	"io"
+	"math"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -25,8 +26,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/basketikun/infinite-canvas/model"
+	"github.com/basketikun/infinite-canvas/service"
 )
 
 const (
@@ -46,6 +52,25 @@ const (
 )
 
 var templateVarPattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
+
+var executorImageQualityBase = map[string]int{
+	"low":      1024,
+	"medium":   2048,
+	"high":     2880,
+	"standard": 1024,
+	"hd":       2048,
+}
+
+var executorImageQualityAliases = map[string]string{
+	"1k": "low",
+	"2k": "medium",
+	"4k": "high",
+}
+
+var executorPixelSizePattern = regexp.MustCompile(`^\d+x\d+$`)
+
+var executorAIImageRequestTimeout = 120 * time.Second
+var executorSensitiveURLPattern = regexp.MustCompile(`https?://[^\s"']+`)
 
 type ExecutorOptions struct {
 	WorkspacePath    string
@@ -88,6 +113,10 @@ type executorNode struct {
 	Count          int                     `json:"count"`
 	Size           string                  `json:"size"`
 	Quality        string                  `json:"quality"`
+	X              float64                 `json:"x,omitempty"`
+	Y              float64                 `json:"y,omitempty"`
+	Width          float64                 `json:"width,omitempty"`
+	Height         float64                 `json:"height,omitempty"`
 	Retry          *executorRetry          `json:"retry,omitempty"`
 	Extra          map[string]any          `json:"extra"`
 	OutputMappings []executorOutputMapping `json:"outputMappings,omitempty"`
@@ -127,6 +156,14 @@ type executorContext struct {
 	nodeOut   map[string]map[string]any
 	client    *http.Client
 	now       func() time.Time
+	product   *executorProductInput
+}
+
+type executorProductInput struct {
+	Key           string
+	Index         int
+	SourceProduct string
+	Input         map[string]any
 }
 
 func RunExecutorOnce(ctx context.Context, opts ExecutorOptions) (ExecutorResult, error) {
@@ -332,6 +369,12 @@ func executeLocalRun(ctx context.Context, workspace Workspace, run Envelope[RunD
 	if err != nil {
 		return failRunResult(workspace, run, runResult, err)
 	}
+	if _, ok := localEcommerceConfigFromTemplate(template); ok {
+		products := executorRunProducts(run.Data.Input)
+		if len(products) > 1 {
+			return executeLocalMultiProductRun(ctx, workspace, run, template, nodes, edges, ordered, products, opts)
+		}
+	}
 	if run.Data.Status == RunStatusPending {
 		if run, err = updateExecutorRun(workspace, run, RunStatusRunning, nil, ""); err != nil {
 			return runResult, err
@@ -464,6 +507,265 @@ func executeLocalRun(ctx context.Context, workspace Workspace, run Envelope[RunD
 	runResult.Status = RunStatusSuccess
 	runResult.ArtifactRefs = len(refs)
 	return runResult, nil
+}
+
+func executeLocalMultiProductRun(ctx context.Context, workspace Workspace, run Envelope[RunData], template Envelope[TemplateData], nodes []executorNode, edges []executorEdge, ordered []executorNode, products []executorProductInput, opts ExecutorOptions) (ExecutorRunResult, error) {
+	runResult := ExecutorRunResult{RunID: run.ID, Status: run.Data.Status}
+	if run.Data.Status == RunStatusPending {
+		var err error
+		if run, err = updateExecutorRun(workspace, run, RunStatusRunning, nil, ""); err != nil {
+			return runResult, err
+		}
+		if _, err := appendExecutorEvent(workspace, run.ID, executorEventClaimed, "info", "Local ecommerce executor claimed run", map[string]any{"templateId": run.Data.TemplateID, "productTotal": len(products)}); err != nil {
+			return runResult, err
+		}
+	} else if _, err := appendExecutorEvent(workspace, run.ID, executorEventResumed, "info", "Local ecommerce executor resumed run", map[string]any{"productTotal": len(products)}); err != nil {
+		return runResult, err
+	}
+
+	project, err := executorProject(workspace, run)
+	if err != nil {
+		return failRunResult(workspace, run, runResult, err)
+	}
+	if err := ensureAggregateProductNodeStates(workspace, run.ID, nodes, products); err != nil {
+		return runResult, err
+	}
+	concurrency := executorProductConcurrency(run, template)
+	productJobs := make(chan executorProductInput)
+	productResults := make(chan ExecutorRunResult, len(products))
+	var aggregateMu sync.Mutex
+	workerCount := min(concurrency, len(products))
+	for worker := 0; worker < workerCount; worker++ {
+		go func() {
+			for product := range productJobs {
+				productResult := executeLocalProduct(ctx, workspace, run, template, project, edges, ordered, products, product, opts, &aggregateMu)
+				productResults <- productResult
+			}
+		}()
+	}
+	for _, product := range products {
+		select {
+		case <-ctx.Done():
+			close(productJobs)
+			return runResult, ctx.Err()
+		case productJobs <- product:
+		}
+	}
+	close(productJobs)
+
+	failedProducts := []string{}
+	for range products {
+		productResult := <-productResults
+		runResult.Executed += productResult.Executed
+		runResult.Skipped += productResult.Skipped
+		if productResult.Error != "" {
+			failedProducts = append(failedProducts, productResult.RunID)
+		}
+	}
+	if err := refreshAggregateProductNodeStates(workspace, run.ID, nodes, products); err != nil {
+		return runResult, err
+	}
+	refs, err := listRunArtifactRefs(workspace, run.ID)
+	if err != nil {
+		return runResult, err
+	}
+	runResult.ArtifactRefs = len(refs)
+	if len(failedProducts) > 0 {
+		message := fmt.Sprintf("%d product(s) failed", len(failedProducts))
+		output := map[string]any{"productTotal": len(products), "failedProducts": len(failedProducts)}
+		run, err = updateExecutorRun(workspace, run, RunStatusError, output, message)
+		if err != nil {
+			return runResult, err
+		}
+		if _, err := appendExecutorEvent(workspace, run.ID, executorEventRunFailed, "error", "Local ecommerce run failed", map[string]any{"error": message, "failedProducts": len(failedProducts)}); err != nil {
+			return runResult, err
+		}
+		runResult.Status = RunStatusError
+		runResult.Error = message
+		return runResult, nil
+	}
+	output := map[string]any{"productTotal": len(products), "completedProducts": len(products)}
+	run, err = updateExecutorRun(workspace, run, RunStatusSuccess, output, "")
+	if err != nil {
+		return runResult, err
+	}
+	if _, err := appendExecutorEvent(workspace, run.ID, executorEventRunCompleted, "info", "Local ecommerce run completed", output); err != nil {
+		return runResult, err
+	}
+	runResult.Status = RunStatusSuccess
+	return runResult, nil
+}
+
+func executeLocalProduct(ctx context.Context, workspace Workspace, run Envelope[RunData], template Envelope[TemplateData], project *Envelope[ProjectData], edges []executorEdge, ordered []executorNode, products []executorProductInput, product executorProductInput, opts ExecutorOptions, aggregateMu *sync.Mutex) ExecutorRunResult {
+	result := ExecutorRunResult{RunID: product.Key, Status: RunStatusRunning}
+	eventData := map[string]any{"productKey": product.Key, "sourceProduct": product.SourceProduct}
+	if _, err := appendExecutorEvent(workspace, run.ID, "executor.product.started", "info", "Product execution started", eventData); err != nil {
+		result.Status = RunStatusError
+		result.Error = err.Error()
+		return result
+	}
+	states, err := executorProductNodeStateMap(workspace, run.ID, product)
+	if err != nil {
+		result.Status = RunStatusError
+		result.Error = err.Error()
+		return result
+	}
+	execCtx := executorContext{
+		workspace: workspace,
+		run:       run,
+		template:  template,
+		project:   project,
+		edges:     edges,
+		input:     product.Input,
+		nodeOut:   executorNodeOutputMap(states),
+		client:    opts.HTTPClient,
+		now:       opts.Now,
+		product:   &product,
+	}
+	if execCtx.client == nil {
+		execCtx.client = http.DefaultClient
+	}
+	if execCtx.now == nil {
+		execCtx.now = time.Now
+	}
+	for _, node := range ordered {
+		if err := ctx.Err(); err != nil {
+			result.Status = RunStatusError
+			result.Error = err.Error()
+			return result
+		}
+		stateID := productScopedNodeID(product.Key, node.ID)
+		current := states[node.ID]
+		switch current.Data.Status {
+		case RunStatusSuccess:
+			result.Skipped++
+			continue
+		case RunStatusError:
+			result.Status = RunStatusError
+			result.Error = nonEmptyString(current.Data.Error, "node already failed")
+			return result
+		}
+		if dependencyFailed(states, edges, node.ID) {
+			result.Status = RunStatusError
+			result.Error = "upstream node failed"
+			return result
+		}
+		if skipped, reason := conditionRouteSkipped(states, edges, node.ID); skipped {
+			finishedAt := executorNow(execCtx.now)
+			output := map[string]any{"skipped": true, "reason": reason, "productKey": product.Key}
+			success, err := writeExecutorNodeState(workspace, run.ID, current, RunNodeStateData{
+				NodeID:     stateID,
+				Status:     RunStatusSuccess,
+				StartedAt:  finishedAt,
+				FinishedAt: finishedAt,
+				Output:     output,
+				Metadata:   productNodeMetadata(node, product),
+			})
+			if err != nil {
+				result.Status = RunStatusError
+				result.Error = err.Error()
+				return result
+			}
+			states[node.ID] = success
+			execCtx.nodeOut[node.ID] = output
+			result.Skipped++
+			if err := refreshAggregateNodeStateLocked(aggregateMu, workspace, run.ID, node, products); err != nil {
+				result.Status = RunStatusError
+				result.Error = err.Error()
+				return result
+			}
+			if _, err := appendExecutorEvent(workspace, run.ID, executorEventNodeSkipped, "info", "Product node skipped", map[string]any{"productKey": product.Key, "nodeId": node.ID, "stateNodeId": stateID, "operation": node.Operation, "reason": reason}); err != nil {
+				result.Status = RunStatusError
+				result.Error = err.Error()
+				return result
+			}
+			continue
+		}
+		if dependencyPending(states, edges, node.ID) {
+			result.Status = RunStatusError
+			result.Error = "upstream node is not ready"
+			return result
+		}
+		startedAt := executorNow(execCtx.now)
+		running, err := writeExecutorNodeState(workspace, run.ID, current, RunNodeStateData{
+			NodeID:    stateID,
+			Status:    RunStatusRunning,
+			StartedAt: startedAt,
+			Metadata:  productNodeMetadata(node, product),
+		})
+		if err != nil {
+			result.Status = RunStatusError
+			result.Error = err.Error()
+			return result
+		}
+		states[node.ID] = running
+		if err := refreshAggregateNodeStateLocked(aggregateMu, workspace, run.ID, node, products); err != nil {
+			result.Status = RunStatusError
+			result.Error = err.Error()
+			return result
+		}
+		if _, err := appendExecutorEvent(workspace, run.ID, executorEventNodeStarted, "info", "Product node started", map[string]any{"productKey": product.Key, "nodeId": node.ID, "stateNodeId": stateID, "operation": node.Operation}); err != nil {
+			result.Status = RunStatusError
+			result.Error = err.Error()
+			return result
+		}
+		output, err := executeLocalNodeWithRetry(ctx, execCtx, node, product.Index*1000+result.Executed)
+		if err != nil {
+			message := redactExecutorError(execCtx, err)
+			_, _ = writeExecutorNodeState(workspace, run.ID, running, RunNodeStateData{
+				NodeID:     stateID,
+				Status:     RunStatusError,
+				StartedAt:  startedAt,
+				FinishedAt: executorNow(execCtx.now),
+				Error:      message,
+				Metadata:   productNodeMetadata(node, product),
+			})
+			_ = refreshAggregateNodeStateLocked(aggregateMu, workspace, run.ID, node, products)
+			_, _ = appendExecutorEvent(workspace, run.ID, executorEventNodeFailed, "error", "Product node failed", map[string]any{"productKey": product.Key, "nodeId": node.ID, "stateNodeId": stateID, "operation": node.Operation, "error": message})
+			result.Status = RunStatusError
+			result.Error = message
+			_, _ = appendExecutorEvent(workspace, run.ID, "executor.product.failed", "error", "Product execution failed", map[string]any{"productKey": product.Key, "error": message})
+			return result
+		}
+		if output == nil {
+			output = map[string]any{}
+		}
+		output["productKey"] = product.Key
+		finishedAt := executorNow(execCtx.now)
+		success, err := writeExecutorNodeState(workspace, run.ID, running, RunNodeStateData{
+			NodeID:     stateID,
+			Status:     RunStatusSuccess,
+			StartedAt:  startedAt,
+			FinishedAt: finishedAt,
+			Output:     output,
+			Metadata:   productNodeMetadata(node, product),
+		})
+		if err != nil {
+			result.Status = RunStatusError
+			result.Error = err.Error()
+			return result
+		}
+		states[node.ID] = success
+		execCtx.nodeOut[node.ID] = output
+		result.Executed++
+		if err := refreshAggregateNodeStateLocked(aggregateMu, workspace, run.ID, node, products); err != nil {
+			result.Status = RunStatusError
+			result.Error = err.Error()
+			return result
+		}
+		if _, err := appendExecutorEvent(workspace, run.ID, executorEventNodeCompleted, "info", "Product node completed", map[string]any{"productKey": product.Key, "nodeId": node.ID, "stateNodeId": stateID, "operation": node.Operation}); err != nil {
+			result.Status = RunStatusError
+			result.Error = err.Error()
+			return result
+		}
+	}
+	if _, err := appendExecutorEvent(workspace, run.ID, "executor.product.completed", "info", "Product execution completed", eventData); err != nil {
+		result.Status = RunStatusError
+		result.Error = err.Error()
+		return result
+	}
+	result.Status = RunStatusSuccess
+	return result
 }
 
 func readExecutorTemplate(workspace Workspace, run Envelope[RunData]) (Envelope[TemplateData], error) {
@@ -662,7 +964,7 @@ func executeLocalNodeWithRetry(ctx context.Context, execCtx executorContext, nod
 			}
 			return output, nil
 		}
-		if !retry.Enabled || (retry.RetryCount > 0 && attempt >= retry.RetryCount) {
+		if executorNonRetryableError(err) || !retry.Enabled || (retry.RetryCount > 0 && attempt >= retry.RetryCount) {
 			return nil, err
 		}
 		attempt++
@@ -683,6 +985,67 @@ func executeLocalNodeWithRetry(ctx context.Context, execCtx executorContext, nod
 		case <-timer.C:
 		}
 	}
+}
+
+func executorNonRetryableError(err error) bool {
+	var workspaceErr *Error
+	if !asLocalWorkspaceError(err, &workspaceErr) {
+		return false
+	}
+	if workspaceErr.Code == ErrorWorkspaceNotFound || workspaceErr.Code == ErrorInvalidArgument || workspaceErr.Code == ErrorAuthFailed {
+		return true
+	}
+	if workspaceErr.Code != ErrorWorkspaceInvalid {
+		return false
+	}
+	message := strings.ToLower(workspaceErr.Message)
+	if strings.Contains(message, "ai provider request failed") {
+		status := executorErrorStatus(workspaceErr.Details)
+		if status >= 400 && status < 500 {
+			return true
+		}
+	}
+	for _, marker := range []string{
+		"profile",
+		"secretref",
+		"secret ref",
+		"channel",
+		"project capability",
+		"project root",
+		"path escapes",
+		"requires run projectid",
+		"material library",
+		"no matching material",
+		"prompt is empty",
+		"requires upstream",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func executorErrorStatus(details any) int {
+	switch typed := details.(type) {
+	case map[string]any:
+		switch value := typed["status"].(type) {
+		case int:
+			return value
+		case int64:
+			return int(value)
+		case float64:
+			return int(value)
+		case json.Number:
+			parsed, _ := value.Int64()
+			return int(parsed)
+		}
+	case map[string]string:
+		var parsed int
+		_, _ = fmt.Sscan(typed["status"], &parsed)
+		return parsed
+	}
+	return 0
 }
 
 type executorRetryConfig struct {
@@ -1013,11 +1376,16 @@ func executeImageGeneration(ctx context.Context, execCtx executorContext, node e
 		"n":               count,
 		"response_format": "b64_json",
 	}
-	if strings.TrimSpace(node.Size) != "" {
-		payload["size"] = strings.TrimSpace(node.Size)
+	quality := normalizeExecutorImageQuality(node.Quality)
+	requestSize := resolveExecutorImageRequestSize(quality, node.Size)
+	if requestSize != "" {
+		payload["size"] = requestSize
 	}
-	if strings.TrimSpace(node.Quality) != "" {
-		payload["quality"] = strings.TrimSpace(node.Quality)
+	if quality != "" {
+		payload["quality"] = quality
+	}
+	if generationConfig := executorFlow2APIImageGenerationConfig(node, requestSize, quality); len(generationConfig) > 0 {
+		payload["generation_config"] = generationConfig
 	}
 	body, err := postLocalAIJSON(ctx, execCtx.workspace, execCtx.run.Data.ProfileID, executorAIChannelID(execCtx), execCtx.client, "/ai/v1/images/generations", payload)
 	if err != nil {
@@ -1072,11 +1440,17 @@ func executeImageEdit(ctx context.Context, execCtx executorContext, node executo
 		"n":               fmt.Sprint(max(1, node.Count)),
 		"response_format": "b64_json",
 	}
-	if strings.TrimSpace(node.Size) != "" {
-		fields["size"] = strings.TrimSpace(node.Size)
+	quality := normalizeExecutorImageQuality(node.Quality)
+	requestSize := resolveExecutorImageRequestSize(quality, node.Size)
+	if requestSize != "" {
+		fields["size"] = requestSize
 	}
-	if strings.TrimSpace(node.Quality) != "" {
-		fields["quality"] = strings.TrimSpace(node.Quality)
+	if quality != "" {
+		fields["quality"] = quality
+	}
+	if generationConfig := executorFlow2APIImageGenerationConfig(node, requestSize, quality); len(generationConfig) > 0 {
+		body, _ := json.Marshal(generationConfig)
+		fields["generation_config"] = string(body)
 	}
 	body, err := postLocalAIMultipart(ctx, execCtx.workspace, execCtx.run.Data.ProfileID, executorAIChannelID(execCtx), execCtx.client, "/ai/v1/images/edits", fields, refs)
 	if err != nil {
@@ -1374,6 +1748,9 @@ func executeLocalEcommerceScriptAction(execCtx executorContext, node executorNod
 }
 
 func executeLocalEcommercePackage(execCtx executorContext, node executorNode, order int) (map[string]any, error) {
+	if stringFromMap(node.Extra, "localEcommercePackageMode") == "source_variants" || len(anySliceFromMap(node.Extra, "sourceVariants")) > 0 {
+		return executeLocalEcommerceSourceVariantsPackage(execCtx, node, order)
+	}
 	root := localEcommerceOutputRoot(execCtx, node)
 	productTitle := safeProjectFileStem(firstNonEmptyString(stringFromAny(firstNonNil(execCtx.input["productTitle"], execCtx.input["title"], execCtx.input["name"])), "product"))
 	base := path.Join(root, execCtx.run.ID, productTitle)
@@ -1435,6 +1812,173 @@ func executeLocalEcommercePackage(execCtx executorContext, node executorNode, or
 	}, nil
 }
 
+type localEcommerceSourceVariantSpec struct {
+	NodeID   string
+	Label    string
+	FileName string
+}
+
+func executeLocalEcommerceSourceVariantsPackage(execCtx executorContext, node executorNode, order int) (map[string]any, error) {
+	root := firstNonEmptyString(stringFromMap(node.Extra, "sourceVariantRoot"), localEcommerceOutputRoot(execCtx, node), "runs")
+	packageRoot := path.Join(root, localEcommerceRunTimestampFolder(execCtx.run), "generated", localEcommerceThemeCharacterFolder(execCtx.input))
+	variants := localEcommerceSourceVariantSpecs(node)
+	if len(variants) == 0 {
+		return nil, NewError(ErrorWorkspaceInvalid, "local ecommerce source variants package requires sourceVariants", 2, map[string]string{"nodeId": node.ID})
+	}
+
+	written := []map[string]any{}
+	for index, variant := range variants {
+		artifactID := firstArtifactIDFromNode(execCtx.nodeOut[variant.NodeID])
+		if artifactID == "" {
+			return nil, NewError(ErrorWorkspaceInvalid, "local ecommerce source variants package missing upstream artifact", 2, map[string]string{"nodeId": node.ID, "sourceNodeId": variant.NodeID})
+		}
+		file, err := readExecutorArtifactImage(execCtx, artifactID)
+		if err != nil {
+			return nil, err
+		}
+		fileName := safeProjectPathSegment(variant.FileName, "")
+		if fileName == "" {
+			fileName = fmt.Sprintf("%02d-%s.png", index+1, safeProjectPathSegment(variant.Label, "source"))
+		}
+		rel, err := writeExecutorProjectFile(execCtx, path.Join(packageRoot, fileName), file.Data)
+		if err != nil {
+			return nil, err
+		}
+		written = append(written, map[string]any{
+			"kind":         "source_variant",
+			"label":        variant.Label,
+			"path":         rel,
+			"artifactId":   artifactID,
+			"bytes":        len(file.Data),
+			"sourceNodeId": variant.NodeID,
+		})
+	}
+
+	manifest := map[string]any{
+		"runId":       execCtx.run.ID,
+		"templateId":  execCtx.template.ID,
+		"theme":       stringFromAny(firstNonNil(execCtx.input["theme"], execCtx.input["animeIP"], execCtx.input["work"])),
+		"character":   stringFromAny(firstNonNil(execCtx.input["character"], execCtx.input["role"], execCtx.input["name"])),
+		"packageRoot": packageRoot,
+		"outputs":     written,
+	}
+	manifestData, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return nil, WrapError(ErrorInternal, "encode local ecommerce source variants manifest", 5, err)
+	}
+	manifestRel, err := writeExecutorProjectFile(execCtx, path.Join(packageRoot, "package.json"), manifestData)
+	if err != nil {
+		return nil, err
+	}
+	artifact, err := createExecutorArtifactForNode(execCtx, node.ID, "text", "application/json", nonEmptyString(node.Title, "Local ecommerce source variants package"), manifestData, "primary_output", "manifest", order, map[string]any{
+		"type":       "local_ecommerce_source_variants_package",
+		"templateId": execCtx.template.ID,
+		"nodeId":     node.ID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"mode":           "source_variants",
+		"packageRoot":    packageRoot,
+		"manifestPath":   manifestRel,
+		"projectOutputs": written,
+		"variantCount":   len(written),
+		"artifactIds":    []string{artifact.ID},
+		"artifactId":     artifact.ID,
+		"first_file":     executorArtifactWorkspaceRef(artifact),
+	}, nil
+}
+
+func localEcommerceSourceVariantSpecs(node executorNode) []localEcommerceSourceVariantSpec {
+	items := anySliceFromMap(node.Extra, "sourceVariants")
+	out := make([]localEcommerceSourceVariantSpec, 0, len(items))
+	for _, item := range items {
+		m, ok := asStringAnyMap(item)
+		if !ok {
+			continue
+		}
+		nodeID := firstNonEmptyString(stringFromMap(m, "nodeId"), stringFromMap(m, "id"))
+		if nodeID == "" {
+			continue
+		}
+		label := firstNonEmptyString(stringFromMap(m, "label"), nodeID)
+		out = append(out, localEcommerceSourceVariantSpec{
+			NodeID:   nodeID,
+			Label:    label,
+			FileName: stringFromMap(m, "fileName"),
+		})
+	}
+	return out
+}
+
+func localEcommerceRunTimestampFolder(run Envelope[RunData]) string {
+	for _, value := range []string{run.CreatedAt, run.UpdatedAt} {
+		if value == "" {
+			continue
+		}
+		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+			return parsed.Local().Format("20060102_150405")
+		}
+	}
+	return safeProjectPathSegment(run.ID, "run")
+}
+
+func localEcommerceThemeCharacterFolder(input map[string]any) string {
+	theme := stripOuterTitleQuotes(stringFromAny(firstNonNil(input["theme"], input["animeIP"], input["work"])))
+	character := stringFromAny(firstNonNil(input["character"], input["role"], input["name"]))
+	theme = safeProjectPathSegment(theme, "")
+	character = safeProjectPathSegment(character, "")
+	switch {
+	case theme != "" && character != "":
+		return theme + " - " + character
+	case theme != "":
+		return theme
+	case character != "":
+		return character
+	default:
+		return "product"
+	}
+}
+
+func stripOuterTitleQuotes(value string) string {
+	value = strings.TrimSpace(value)
+	for {
+		next := strings.TrimSpace(strings.Trim(value, "《》「」“”\"'`"))
+		if next == value {
+			return value
+		}
+		value = next
+	}
+}
+
+func safeProjectPathSegment(value string, fallback string) string {
+	value = strings.TrimSpace(value)
+	value = strings.Map(func(r rune) rune {
+		switch {
+		case r == '/' || r == '\\' || r == 0:
+			return '_'
+		case r < 32 || r == 127:
+			return -1
+		default:
+			return r
+		}
+	}, value)
+	value = strings.Join(strings.Fields(value), " ")
+	value = strings.Trim(value, " ._-")
+	if value == "" {
+		value = strings.TrimSpace(fallback)
+	}
+	if value == "" {
+		return ""
+	}
+	if len([]rune(value)) > 80 {
+		runes := []rune(value)
+		value = string(runes[:80])
+	}
+	return value
+}
+
 func executeLocalEcommerceSyncLocal(execCtx executorContext, node executorNode, order int) (map[string]any, error) {
 	root := localEcommerceOutputRoot(execCtx, node)
 	productTitle := safeProjectFileStem(firstNonEmptyString(stringFromAny(firstNonNil(execCtx.input["productTitle"], execCtx.input["title"], execCtx.input["name"])), "product"))
@@ -1487,7 +2031,19 @@ func createExecutorArtifactForNode(execCtx executorContext, nodeID string, artif
 	if err := requireExecutorArtifactWrite(execCtx); err != nil {
 		return Envelope[ArtifactData]{}, err
 	}
-	return createExecutorArtifact(execCtx.workspace, execCtx.run.ID, nodeID, artifactType, mimeType, title, data, role, slot, order, source)
+	refNodeID := nodeID
+	if execCtx.product != nil {
+		if source == nil {
+			source = map[string]any{}
+		} else {
+			source = cloneMap(source)
+		}
+		source["templateNodeId"] = nodeID
+		source["productKey"] = execCtx.product.Key
+		source["sourceProduct"] = execCtx.product.SourceProduct
+		refNodeID = productScopedNodeID(execCtx.product.Key, nodeID)
+	}
+	return createExecutorArtifact(execCtx.workspace, execCtx.run.ID, refNodeID, artifactType, mimeType, title, data, role, slot, order, source)
 }
 
 type executorGeneratedFile struct {
@@ -1647,6 +2203,26 @@ func postLocalAIMultipart(ctx context.Context, workspace Workspace, profileID st
 	if err != nil {
 		return nil, err
 	}
+	if localAIFlow2APIChannel(channel) && strings.HasSuffix(localPath, "/images/edits") {
+		refs := make([]service.ModelReference, 0, len(files))
+		for index, file := range files {
+			refs = append(refs, service.ModelReference{
+				Name:     fmt.Sprintf("input_%d%s", index+1, extensionForMIME(file.MIME, "image")),
+				MimeType: file.MIME,
+				Data:     append([]byte{}, file.Data...),
+			})
+		}
+		count := positiveInt(fields["n"])
+		if count <= 0 {
+			count = 1
+		}
+		images, err := service.Flow2APIImageEditWithOptions(localAIModelChannel(channel, secret), fields["model"], fields["prompt"], refs, count, localAIFlow2APIImageOptions(fields))
+		if err != nil {
+			return nil, NewError(ErrorWorkspaceInvalid, "ai provider request failed", 2, map[string]any{"message": localAIProviderErrorMessage(err)})
+		}
+		return localAIImagesResponse(images), nil
+	}
+	fields = normalizeOpenAICompatibleImageFields(fields)
 	target, err := buildAIProxyTargetURL(channel.BaseURL, localPath, "")
 	if err != nil {
 		return nil, err
@@ -1670,7 +2246,9 @@ func postLocalAIMultipart(ctx context.Context, workspace Workspace, profileID st
 	if err := writer.Close(); err != nil {
 		return nil, WrapError(ErrorInternal, "close ai multipart request", 5, err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), &body)
+	requestCtx, cancel := executorAIRequestContext(ctx, localPath)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, target.String(), &body)
 	if err != nil {
 		return nil, WrapError(ErrorInternal, "create ai request", 5, err)
 	}
@@ -1703,15 +2281,49 @@ func postLocalAIJSON(ctx context.Context, workspace Workspace, profileID string,
 	if err != nil {
 		return nil, err
 	}
+	if localAIFlow2APIChannel(channel) && strings.HasSuffix(localPath, "/images/generations") {
+		var request struct {
+			Model            string         `json:"model"`
+			Prompt           string         `json:"prompt"`
+			N                int            `json:"n"`
+			Quality          string         `json:"quality"`
+			Size             string         `json:"size"`
+			GenerationConfig map[string]any `json:"generation_config"`
+		}
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return nil, WrapError(ErrorInternal, "encode ai request", 5, err)
+		}
+		if err := json.Unmarshal(body, &request); err != nil {
+			return nil, WrapError(ErrorWorkspaceInvalid, "parse ai image request", 2, err)
+		}
+		if request.N <= 0 {
+			request.N = 1
+		}
+		images, err := service.Flow2APIImageGenerationWithOptions(localAIModelChannel(channel, secret), request.Model, request.Prompt, request.N, service.Flow2APIImageOptions{
+			Quality:          request.Quality,
+			Size:             request.Size,
+			GenerationConfig: request.GenerationConfig,
+		})
+		if err != nil {
+			return nil, NewError(ErrorWorkspaceInvalid, "ai provider request failed", 2, map[string]any{"message": localAIProviderErrorMessage(err)})
+		}
+		return localAIImagesResponse(images), nil
+	}
 	target, err := buildAIProxyTargetURL(channel.BaseURL, localPath, "")
 	if err != nil {
 		return nil, err
+	}
+	if localAIImageEndpoint(localPath) {
+		payload = normalizeOpenAICompatibleImagePayload(payload)
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, WrapError(ErrorInternal, "encode ai request", 5, err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), bytes.NewReader(body))
+	requestCtx, cancel := executorAIRequestContext(ctx, localPath)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, target.String(), bytes.NewReader(body))
 	if err != nil {
 		return nil, WrapError(ErrorInternal, "create ai request", 5, err)
 	}
@@ -1733,6 +2345,247 @@ func postLocalAIJSON(ctx context.Context, workspace Workspace, profileID string,
 		return nil, NewError(ErrorWorkspaceInvalid, "ai provider request failed", 2, map[string]any{"status": response.StatusCode, "message": localAIErrorMessage(responseBody)})
 	}
 	return responseBody, nil
+}
+
+func localAIFlow2APIChannel(channel ProfileChannel) bool {
+	protocol := strings.ToLower(strings.TrimSpace(channel.Protocol))
+	if protocol == "flow2api" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(channel.ID), "flow2api") || strings.Contains(strings.ToLower(channel.Name), "flow2api")
+}
+
+func localAIModelChannel(channel ProfileChannel, secret string) model.ModelChannel {
+	protocol := strings.TrimSpace(channel.Protocol)
+	if localAIFlow2APIChannel(channel) {
+		protocol = "flow2api"
+	}
+	return model.ModelChannel{
+		Name:     channel.Name,
+		BaseURL:  channel.BaseURL,
+		APIKey:   secret,
+		Protocol: protocol,
+		Models:   append([]string{}, channel.Models...),
+		Weight:   max(channel.Weight, 1),
+	}
+}
+
+func localAIFlow2APIImageOptions(fields map[string]string) service.Flow2APIImageOptions {
+	options := service.Flow2APIImageOptions{
+		Quality: strings.TrimSpace(fields["quality"]),
+		Size:    strings.TrimSpace(fields["size"]),
+	}
+	if raw := strings.TrimSpace(fields["generation_config"]); raw != "" {
+		parsed := map[string]any{}
+		if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
+			options.GenerationConfig = parsed
+		}
+	}
+	return options
+}
+
+func executorAIRequestContext(ctx context.Context, localPath string) (context.Context, context.CancelFunc) {
+	if localAIImageEndpoint(localPath) && executorAIImageRequestTimeout > 0 {
+		return context.WithTimeout(ctx, executorAIImageRequestTimeout)
+	}
+	return ctx, func() {}
+}
+
+func localAIImageEndpoint(localPath string) bool {
+	return strings.Contains(localPath, "/images/")
+}
+
+func normalizeOpenAICompatibleImageFields(fields map[string]string) map[string]string {
+	out := make(map[string]string, len(fields))
+	for key, value := range fields {
+		out[key] = value
+	}
+	if size := strings.TrimSpace(out["size"]); size != "" {
+		out["size"] = normalizeOpenAICompatibleImageSize(size)
+	}
+	delete(out, "generation_config")
+	return out
+}
+
+func normalizeOpenAICompatibleImagePayload(payload any) any {
+	values, ok := payload.(map[string]any)
+	if !ok {
+		return payload
+	}
+	out := cloneMap(values)
+	if size := strings.TrimSpace(stringFromAny(out["size"])); size != "" {
+		out["size"] = normalizeOpenAICompatibleImageSize(size)
+	}
+	delete(out, "generation_config")
+	return out
+}
+
+func normalizeOpenAICompatibleImageSize(size string) string {
+	value := strings.TrimSpace(size)
+	switch strings.ToLower(value) {
+	case "", "auto":
+		return value
+	case "square":
+		return "1024x1024"
+	case "portrait":
+		return "1024x1536"
+	case "landscape":
+		return "1536x1024"
+	}
+	switch value {
+	case "1024x1024", "1024x1536", "1536x1024":
+		return value
+	}
+	if width, height, ok := parseExecutorImageSize(value); ok {
+		return nearestOpenAICompatibleImageSize(width, height)
+	}
+	if width, height, ok := parseExecutorImageRatio(value); ok {
+		return nearestOpenAICompatibleImageSize(width, height)
+	}
+	return value
+}
+
+func parseExecutorImageSize(value string) (float64, float64, bool) {
+	if !executorPixelSizePattern.MatchString(value) {
+		return 0, 0, false
+	}
+	parts := strings.Split(value, "x")
+	width, errW := strconv.ParseFloat(parts[0], 64)
+	height, errH := strconv.ParseFloat(parts[1], 64)
+	return width, height, errW == nil && errH == nil && width > 0 && height > 0
+}
+
+func parseExecutorImageRatio(value string) (float64, float64, bool) {
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	width, errW := strconv.ParseFloat(parts[0], 64)
+	height, errH := strconv.ParseFloat(parts[1], 64)
+	return width, height, errW == nil && errH == nil && width > 0 && height > 0
+}
+
+func nearestOpenAICompatibleImageSize(width float64, height float64) string {
+	ratio := width / height
+	switch {
+	case ratio > 1.15:
+		return "1536x1024"
+	case ratio < 0.87:
+		return "1024x1536"
+	default:
+		return "1024x1024"
+	}
+}
+
+func normalizeExecutorImageQuality(quality string) string {
+	value := strings.ToLower(strings.TrimSpace(quality))
+	if alias := executorImageQualityAliases[value]; alias != "" {
+		value = alias
+	}
+	if _, ok := executorImageQualityBase[value]; ok {
+		return value
+	}
+	return ""
+}
+
+func resolveExecutorImageRequestSize(quality string, size string) string {
+	value := strings.TrimSpace(size)
+	if value == "" || value == "auto" {
+		return ""
+	}
+	if executorPixelSizePattern.MatchString(value) {
+		return value
+	}
+	if quality != "" {
+		if resolved := resolveExecutorImageRatioSize(quality, value); resolved != "" {
+			return resolved
+		}
+	}
+	return value
+}
+
+func resolveExecutorImageRatioSize(quality string, ratio string) string {
+	basePixels, ok := executorImageQualityBase[quality]
+	if !ok || ratio == "" || ratio == "auto" {
+		return ""
+	}
+	parts := strings.Split(ratio, ":")
+	if len(parts) != 2 {
+		return ""
+	}
+	w, errW := strconv.ParseFloat(parts[0], 64)
+	h, errH := strconv.ParseFloat(parts[1], 64)
+	if errW != nil || errH != nil || w == 0 || h == 0 {
+		return ""
+	}
+	targetPixels := float64(basePixels * basePixels)
+	isLandscape := w >= h
+	longRatio := w / h
+	if !isLandscape {
+		longRatio = h / w
+	}
+	longSide := math.Floor(math.Sqrt(targetPixels*longRatio)/16) * 16
+	shortSide := math.Round((longSide/longRatio)/16) * 16
+	width := int(shortSide)
+	height := int(longSide)
+	if isLandscape {
+		width = int(longSide)
+		height = int(shortSide)
+	}
+	return fmt.Sprintf("%dx%d", width, height)
+}
+
+func executorFlow2APIImageGenerationConfig(node executorNode, requestSize string, quality string) map[string]any {
+	result := map[string]any{}
+	if strings.TrimSpace(requestSize) != "" {
+		result["size"] = requestSize
+	}
+	if strings.TrimSpace(quality) != "" {
+		result["quality"] = quality
+	}
+	if strings.TrimSpace(node.Size) != "" {
+		result["aspectRatio"] = node.Size
+	}
+	if strings.TrimSpace(node.Quality) != "" {
+		result["qualityLabel"] = node.Quality
+	}
+	for _, key := range []string{"aspectRatio", "outputFormat", "background", "style", "seed"} {
+		if value := stringFromMap(node.Extra, key); value != "" {
+			result[key] = value
+		}
+	}
+	return result
+}
+
+func localAIImagesResponse(images [][]byte) []byte {
+	response := struct {
+		Data []struct {
+			B64JSON string `json:"b64_json"`
+		} `json:"data"`
+	}{Data: make([]struct {
+		B64JSON string `json:"b64_json"`
+	}, 0, len(images))}
+	for _, image := range images {
+		response.Data = append(response.Data, struct {
+			B64JSON string `json:"b64_json"`
+		}{B64JSON: base64.StdEncoding.EncodeToString(image)})
+	}
+	body, _ := json.Marshal(response)
+	return body
+}
+
+func localAIProviderErrorMessage(err error) string {
+	message := strings.TrimSpace(err.Error())
+	if message == "" {
+		return ""
+	}
+	message = strings.ReplaceAll(message, "\n", " ")
+	message = regexp.MustCompile(`Bearer\s+[A-Za-z0-9._-]+`).ReplaceAllString(message, "Bearer <redacted>")
+	message = regexp.MustCompile(`https?://[^\s"']+`).ReplaceAllString(message, "<url>")
+	if len(message) > 500 {
+		message = message[:500]
+	}
+	return message
 }
 
 func parseLocalAIText(body []byte) (string, error) {
@@ -1835,6 +2688,14 @@ func downloadExecutorImage(ctx context.Context, client *http.Client, imageURL st
 func createExecutorArtifact(workspace Workspace, runID string, nodeID string, artifactType string, mimeType string, title string, data []byte, role string, slot string, order int, source map[string]any) (Envelope[ArtifactData], error) {
 	sum := sha256.Sum256(data)
 	files := map[string]string{"original": path.Join("files", "original"+extensionForMIME(mimeType, artifactType))}
+	refMetadata := map[string]any{"createdBy": executorID}
+	if source != nil {
+		for _, key := range []string{"productKey", "sourceProduct", "templateNodeId"} {
+			if value, ok := source[key]; ok && stringFromAny(value) != "" {
+				refMetadata[key] = value
+			}
+		}
+	}
 	artifactData := ArtifactData{
 		Type:    artifactType,
 		MIME:    mimeType,
@@ -1883,9 +2744,7 @@ func createExecutorArtifact(workspace Workspace, runID string, nodeID string, ar
 			NodeID:     nodeID,
 			Slot:       slot,
 			Order:      order,
-			Metadata: map[string]any{
-				"createdBy": executorID,
-			},
+			Metadata:   refMetadata,
 		},
 	}
 	if err := WriteRunArtifactRef(workspace, runID, ref); err != nil {
@@ -2088,7 +2947,7 @@ func edgeRoutingConditionMatches(edge executorEdge, sourceOutput map[string]any)
 }
 
 func failNodeAndRun(workspace Workspace, run Envelope[RunData], node executorNode, cause error, existing Envelope[RunNodeStateData]) error {
-	message := safeExecutorError(cause)
+	message := redactExecutorText(executorContext{workspace: workspace}, safeExecutorError(cause))
 	data := RunNodeStateData{
 		NodeID:     node.ID,
 		Status:     RunStatusError,
@@ -2117,7 +2976,7 @@ func failNodeAndRunResult(workspace Workspace, run Envelope[RunData], runResult 
 }
 
 func failRun(workspace Workspace, run Envelope[RunData], cause error) error {
-	message := safeExecutorError(cause)
+	message := redactExecutorText(executorContext{workspace: workspace}, safeExecutorError(cause))
 	updated, err := updateExecutorRun(workspace, run, RunStatusError, map[string]any{"error": message}, message)
 	if err != nil {
 		return err
@@ -2135,7 +2994,7 @@ func failRunResult(workspace Workspace, run Envelope[RunData], runResult Executo
 
 func executorFailedRunResult(workspace Workspace, runID string, runResult ExecutorRunResult, cause error) ExecutorRunResult {
 	runResult.Status = RunStatusError
-	runResult.Error = safeExecutorError(cause)
+	runResult.Error = redactExecutorText(executorContext{workspace: workspace}, safeExecutorError(cause))
 	if refs, err := listRunArtifactRefs(workspace, runID); err == nil {
 		runResult.ArtifactRefs = len(refs)
 	}
@@ -2152,6 +3011,138 @@ func appendExecutorEvent(workspace Workspace, runID string, eventType string, le
 	})
 }
 
+func ensureAggregateProductNodeStates(workspace Workspace, runID string, nodes []executorNode, products []executorProductInput) error {
+	for _, node := range nodes {
+		if err := refreshAggregateProductNodeState(workspace, runID, node, products); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func refreshAggregateProductNodeStates(workspace Workspace, runID string, nodes []executorNode, products []executorProductInput) error {
+	for _, node := range nodes {
+		if err := refreshAggregateProductNodeState(workspace, runID, node, products); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func refreshAggregateNodeStateLocked(mu *sync.Mutex, workspace Workspace, runID string, node executorNode, products []executorProductInput) error {
+	if mu != nil {
+		mu.Lock()
+		defer mu.Unlock()
+	}
+	return refreshAggregateProductNodeState(workspace, runID, node, products)
+}
+
+func refreshAggregateProductNodeState(workspace Workspace, runID string, node executorNode, products []executorProductInput) error {
+	states, err := executorNodeStateMap(workspace, runID)
+	if err != nil {
+		return err
+	}
+	total := len(products)
+	success := 0
+	failed := 0
+	running := 0
+	skipped := 0
+	recentError := ""
+	startedAt := ""
+	finishedAt := ""
+	for _, product := range products {
+		state := states[productScopedNodeID(product.Key, node.ID)]
+		switch state.Data.Status {
+		case RunStatusSuccess:
+			success++
+			if state.Data.Output != nil && state.Data.Output["skipped"] == true {
+				skipped++
+			}
+		case RunStatusError:
+			failed++
+			if recentError == "" {
+				recentError = state.Data.Error
+			}
+		case RunStatusRunning:
+			running++
+		}
+		if startedAt == "" || (state.Data.StartedAt != "" && state.Data.StartedAt < startedAt) {
+			startedAt = state.Data.StartedAt
+		}
+		if state.Data.FinishedAt != "" && state.Data.FinishedAt > finishedAt {
+			finishedAt = state.Data.FinishedAt
+		}
+	}
+	status := RunStatusPending
+	switch {
+	case failed > 0:
+		status = RunStatusError
+	case running > 0:
+		status = RunStatusRunning
+	case total > 0 && success == total:
+		status = RunStatusSuccess
+	}
+	output := map[string]any{
+		"total":   total,
+		"success": success,
+		"failed":  failed,
+		"running": running,
+		"pending": max(0, total-success-failed-running),
+		"skipped": skipped,
+	}
+	_, err = writeExecutorNodeState(workspace, runID, states[node.ID], RunNodeStateData{
+		NodeID:     node.ID,
+		Status:     status,
+		StartedAt:  startedAt,
+		FinishedAt: finishedAt,
+		Error:      recentError,
+		Output:     output,
+		Metadata:   aggregateProductNodeMetadata(node, total),
+	})
+	return err
+}
+
+func executorProductNodeStateMap(workspace Workspace, runID string, product executorProductInput) (map[string]Envelope[RunNodeStateData], error) {
+	all, err := executorNodeStateMap(workspace, runID)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]Envelope[RunNodeStateData]{}
+	prefix := productScopedNodePrefix(product.Key)
+	for nodeID, state := range all {
+		if strings.HasPrefix(nodeID, prefix) {
+			out[strings.TrimPrefix(nodeID, prefix)] = state
+		}
+	}
+	return out, nil
+}
+
+func productScopedNodePrefix(productKey string) string {
+	return "product/" + productKey + "/"
+}
+
+func productScopedNodeID(productKey string, nodeID string) string {
+	return productScopedNodePrefix(productKey) + nodeID
+}
+
+func productNodeMetadata(node executorNode, product executorProductInput) map[string]any {
+	metadata := executorNodeMetadata(node)
+	metadata["templateNodeId"] = node.ID
+	metadata["productKey"] = product.Key
+	metadata["productIndex"] = product.Index
+	if product.SourceProduct != "" {
+		metadata["sourceProduct"] = product.SourceProduct
+	}
+	return metadata
+}
+
+func aggregateProductNodeMetadata(node executorNode, productTotal int) map[string]any {
+	metadata := executorNodeMetadata(node)
+	metadata["aggregate"] = true
+	metadata["productTotal"] = productTotal
+	return metadata
+}
+
 func executorRunInput(input map[string]any) map[string]any {
 	if len(input) == 0 {
 		return map[string]any{}
@@ -2166,6 +3157,118 @@ func executorRunInput(input map[string]any) map[string]any {
 		}
 	}
 	return input
+}
+
+func executorRunProducts(input map[string]any) []executorProductInput {
+	if len(input) == 0 {
+		return []executorProductInput{executorProductFromInput(0, map[string]any{})}
+	}
+	items := anySliceFromMap(input, "inputs")
+	if len(items) == 0 {
+		items = anySliceFromMap(input, "items")
+	}
+	if len(items) == 0 {
+		return []executorProductInput{executorProductFromInput(0, input)}
+	}
+	products := make([]executorProductInput, 0, len(items))
+	seen := map[string]int{}
+	for index, item := range items {
+		values, ok := asStringAnyMap(item)
+		if !ok {
+			values = map[string]any{"value": item}
+		}
+		product := executorProductFromInput(index, values)
+		if count := seen[product.Key]; count > 0 {
+			product.Key = fmt.Sprintf("%s_%02d", product.Key, count+1)
+			product.Input["productKey"] = product.Key
+		}
+		seen[product.Key]++
+		products = append(products, product)
+	}
+	return products
+}
+
+func executorProductFromInput(index int, input map[string]any) executorProductInput {
+	values := cloneMap(input)
+	if values == nil {
+		values = map[string]any{}
+	}
+	sourceProduct := firstNonEmptyString(
+		stringFromAny(firstNonNil(values["sourceProduct"], values["productTitle"], values["title"], values["name"], values["product"])),
+		fmt.Sprintf("product-%03d", index+1),
+	)
+	key := firstNonEmptyString(
+		stringFromAny(firstNonNil(values["productKey"], values["key"], values["id"])),
+		fmt.Sprintf("product_%03d", index+1),
+	)
+	key = safeProductKey(key)
+	values["productKey"] = key
+	values["productIndex"] = index
+	values["sourceProduct"] = sourceProduct
+	if _, ok := values["productTitle"]; !ok {
+		values["productTitle"] = sourceProduct
+	}
+	return executorProductInput{
+		Key:           key,
+		Index:         index,
+		SourceProduct: sourceProduct,
+		Input:         values,
+	}
+}
+
+func safeProductKey(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "product"
+	}
+	var builder strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		case r == '_' || r == '-':
+			builder.WriteRune(r)
+		default:
+			builder.WriteRune('_')
+		}
+	}
+	out := strings.Trim(builder.String(), "_-")
+	if out == "" {
+		return "product"
+	}
+	if len(out) > 48 {
+		out = out[:48]
+	}
+	return out
+}
+
+func executorProductConcurrency(run Envelope[RunData], template Envelope[TemplateData]) int {
+	for _, value := range []any{run.Data.Input["productConcurrency"], template.Data.Settings["productConcurrency"]} {
+		if parsed := positiveInt(value); parsed > 0 {
+			return min(parsed, 8)
+		}
+	}
+	return 1
+}
+
+func positiveInt(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case json.Number:
+		parsed, _ := typed.Int64()
+		return int(parsed)
+	case string:
+		var parsed int
+		if _, err := fmt.Sscanf(strings.TrimSpace(typed), "%d", &parsed); err == nil {
+			return parsed
+		}
+	}
+	return 0
 }
 
 func renderExecutorPrompt(prompt string, input map[string]any, nodeOutput map[string]map[string]any) string {
@@ -2612,6 +3715,7 @@ func redactExecutorText(execCtx executorContext, value string) string {
 		}
 		out = strings.ReplaceAll(out, value, item.label)
 	}
+	out = executorSensitiveURLPattern.ReplaceAllString(out, "<url>")
 	return strings.TrimSpace(out)
 }
 

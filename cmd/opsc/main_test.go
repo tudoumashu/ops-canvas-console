@@ -608,7 +608,7 @@ func TestEcommerceImportTemplateCommandLocalExecutable(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		_, _ = io.WriteString(w, `{"code":0,"data":{"id":"remote_tpl","workflowType":"pdd","title":"Local Executable Ecommerce","spec":{"version":1,"nodes":[{"id":"reference","type":"material_lookup","operation":"material_lookup","extra":{}},{"id":"mockup_base","type":"material_lookup","operation":"material_lookup","extra":{"assetId":"pdd-mockup-sku-artwork-base"}},{"id":"package","type":"script","operation":"script","extra":{"executor":"vps"}},{"id":"sync_local","type":"script","operation":"script","extra":{"executor":"vps"}}],"edges":[],"settings":{"productConcurrency":1,"maxRetries":0}}},"msg":"ok"}`)
+		_, _ = io.WriteString(w, `{"code":0,"data":{"id":"remote_tpl","workflowType":"pdd","title":"Local Executable Ecommerce","spec":{"version":1,"nodes":[{"id":"reference","type":"material_lookup","operation":"material_lookup","extra":{}},{"id":"mockup_base","type":"material_lookup","operation":"material_lookup","extra":{"assetId":"pdd-mockup-sku-artwork-base"}},{"id":"source_japanese","type":"image_edit","operation":"image_edit","size":"2:3","quality":"high","extra":{}},{"id":"package","type":"script","operation":"script","extra":{"executor":"vps"}},{"id":"sync_local","type":"script","operation":"script","extra":{"executor":"vps"}}],"edges":[],"settings":{"productConcurrency":1,"maxRetries":0}}},"msg":"ok"}`)
 	}))
 	defer remote.Close()
 
@@ -641,8 +641,11 @@ func TestEcommerceImportTemplateCommandLocalExecutable(t *testing.T) {
 	if got, _ := templates[0].Data.Settings["defaultProjectId"].(string); got != "proj_local" {
 		t.Fatalf("defaultProjectId = %q, want proj_local", got)
 	}
-	nodes := string(templates[0].Data.Nodes[0]) + string(templates[0].Data.Nodes[1]) + string(templates[0].Data.Nodes[2]) + string(templates[0].Data.Nodes[3])
-	for _, want := range []string{`"assetMode": "auto"`, `"fallback": "builtin_pdd_mockup_base"`, `"localEcommerceAction": "package"`, `"localEcommerceAction": "sync_local"`} {
+	nodes := ""
+	for _, raw := range templates[0].Data.Nodes {
+		nodes += string(raw)
+	}
+	for _, want := range []string{`"assetMode": "auto"`, `"fallback": "builtin_pdd_mockup_base"`, `"size": "1024x1024"`, `"quality": "low"`, "Use image 1 as reference", `"localEcommerceAction": "package"`, `"localEcommerceAction": "sync_local"`} {
 		if !strings.Contains(nodes, want) {
 			t.Fatalf("localized nodes missing %q:\n%s", want, nodes)
 		}

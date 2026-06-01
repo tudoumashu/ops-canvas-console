@@ -93,7 +93,7 @@ export function LocalWorkspaceButton() {
                         <Alert
                             type="success"
                             showIcon
-                            message={workspace?.name || "已连接"}
+                            title={workspace?.name || "已连接"}
                             description={
                                 <span>
                                     workspaceId: <Typography.Text code>{workspace?.id}</Typography.Text>
@@ -101,9 +101,9 @@ export function LocalWorkspaceButton() {
                             }
                         />
                     ) : serveAvailable ? (
-                        <Alert type="warning" showIcon message="opsc serve 已启动，等待授权" description={lastError || "请输入本次启动生成的 launch secret 建立浏览器 session。"} />
+                        <Alert type="warning" showIcon title="opsc serve 已启动，等待授权" description={lastError || "请输入本次启动生成的 launch secret 建立浏览器 session。"} />
                     ) : (
-                        <Alert type="warning" showIcon message="未检测到本地工作区服务" description={lastError || "启动 opsc serve 后，使用 launch secret 建立浏览器 session。"} />
+                        <Alert type="warning" showIcon title="未检测到本地工作区服务" description={lastError || "启动 opsc serve 后，使用 launch secret 建立浏览器 session。"} />
                     )}
 
                     <div className="space-y-2">
@@ -117,7 +117,8 @@ export function LocalWorkspaceButton() {
                     </div>
 
                     <Typography.Paragraph type="secondary" className="!mb-0 !text-xs">
-                        启动示例：<Typography.Text code>opsc serve --origin {typeof window === "undefined" ? "http://127.0.0.1:3000" : window.location.origin}</Typography.Text>，然后读取 runtime state 目录里的 <Typography.Text code>launch.secret</Typography.Text>。
+                        启动示例：<Typography.Text code>opsc serve --origin {typeof window === "undefined" ? "http://127.0.0.1:3000" : window.location.origin}</Typography.Text>，然后读取 runtime state 目录里的{" "}
+                        <Typography.Text code>launch.secret</Typography.Text>。
                     </Typography.Paragraph>
 
                     <Space wrap>

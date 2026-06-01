@@ -52,12 +52,20 @@ import {
     type PDDStageNode,
 } from "@/services/api/pdd";
 import { requestVideoGeneration } from "@/services/api/video";
+import {
+    applyLocalPDDCreativeCanvasOutput,
+    fetchLocalPDDCreativeCanvas,
+    fetchLocalPDDProductDetail,
+    fetchLocalPDDRunOverview,
+    saveLocalPDDCreativeCanvas,
+    uploadLocalPDDCreativeCanvasAsset,
+} from "@/services/local-workspace";
 import { defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { useAssetStore } from "@/stores/use-asset-store";
+import { useLocalWorkspaceStore } from "@/stores/use-local-workspace-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
-import LocalRunClientPage from "./local-run-client-page";
 
 type DetailTarget = { kind: "stage"; stage: PDDStageNode } | { kind: "product-node"; node: PDDGraphNode; product: PDDProductDetail } | { kind: "artifact"; artifact: PDDArtifact; product: PDDProductDetail } | { kind: "file"; file: PDDDetailFile };
 
@@ -66,6 +74,7 @@ type DrawerKind = "products" | "detail" | "log" | null;
 type DetailTabKey = "summary" | "files" | "log";
 type LightboxImage = { title: string; src: string; path: string; artifact?: PDDArtifact; node?: PDDGraphNode; product?: PDDProductDetail };
 type ManualEditTarget = { artifact: PDDArtifact; node: PDDGraphNode; product: PDDProductDetail };
+type PDDRunDataSource = { kind: "remote"; token: string } | { kind: "local"; token: string; baseUrl: string };
 
 const stagePositions = {
     y: 40,
@@ -84,15 +93,63 @@ const statusMeta: Record<PDDRunStatus, { label: string; color: string; className
 };
 
 export default function PDDRunClientPage({ runId }: { runId: string }) {
-    if (runId.startsWith("run_")) return <LocalRunClientPage runId={runId} />;
+    if (runId.startsWith("run_")) return <PDDLocalRunClientPage runId={runId} />;
     return <PDDRemoteRunClientPage runId={runId} />;
 }
 
+function PDDLocalRunClientPage({ runId }: { runId: string }) {
+    const status = useLocalWorkspaceStore((state) => state.status);
+    const workspace = useLocalWorkspaceStore((state) => state.workspace);
+    const baseUrl = useLocalWorkspaceStore((state) => state.baseUrl);
+    const refresh = useLocalWorkspaceStore((state) => state.refresh);
+    const connected = status === "connected" && Boolean(workspace);
+
+    useEffect(() => {
+        if (!connected && status !== "checking") void refresh();
+    }, [connected, refresh, status]);
+
+    if (!connected) {
+        return (
+            <main className="flex h-full items-center justify-center bg-background px-6 text-foreground">
+                <Card className="w-full max-w-md">
+                    <Typography.Title level={3}>需要连接本地工作区</Typography.Title>
+                    <Typography.Paragraph type="secondary">请先启动 `opsc serve` 并在顶部本地工作区入口完成连接。</Typography.Paragraph>
+                    <Button loading={status === "checking"} onClick={() => void refresh()}>
+                        重新检测
+                    </Button>
+                </Card>
+            </main>
+        );
+    }
+
+    return <PDDRunCanvasPage runId={runId} dataSource={{ kind: "local", baseUrl, token: localPDDRunToken(baseUrl) }} />;
+}
+
 function PDDRemoteRunClientPage({ runId }: { runId: string }) {
-    const { message, modal } = App.useApp();
     const token = useUserStore((state) => state.token);
     const user = useUserStore((state) => state.user);
-    const [viewMode, setViewMode] = useState<RunViewMode>("overview");
+
+    if (!token || !user) {
+        return (
+            <main className="flex h-full items-center justify-center bg-background px-6 text-foreground">
+                <Card className="w-full max-w-md">
+                    <Typography.Title level={3}>需要登录</Typography.Title>
+                    <Typography.Paragraph type="secondary">请先登录管理员账号后查看电商工作流。</Typography.Paragraph>
+                    <Button type="primary" href="/login">
+                        去登录
+                    </Button>
+                </Card>
+            </main>
+        );
+    }
+
+    return <PDDRunCanvasPage runId={runId} dataSource={{ kind: "remote", token }} />;
+}
+
+function PDDRunCanvasPage({ runId, dataSource }: { runId: string; dataSource: PDDRunDataSource }) {
+    const { message, modal } = App.useApp();
+    const token = dataSource.token;
+    const [viewMode, setViewMode] = useState<RunViewMode>(() => (dataSource.kind === "local" ? "product" : "overview"));
     const [drawer, setDrawer] = useState<DrawerKind>(null);
     const [detailTab, setDetailTab] = useState<DetailTabKey>("summary");
     const [selectedProductKey, setSelectedProductKey] = useState("");
@@ -108,8 +165,8 @@ function PDDRemoteRunClientPage({ runId }: { runId: string }) {
     const [manualEditForm] = Form.useForm();
 
     const overviewQuery = useQuery({
-        queryKey: ["pdd-run-overview", runId, token],
-        queryFn: () => fetchPDDRunOverview(runId, token),
+        queryKey: ["pdd-run-overview", dataSource.kind, dataSource.kind === "local" ? dataSource.baseUrl : token, runId],
+        queryFn: () => fetchPDDRunOverviewForSource(dataSource, runId),
         enabled: Boolean(token && runId),
         refetchInterval: 3000,
     });
@@ -118,8 +175,8 @@ function PDDRemoteRunClientPage({ runId }: { runId: string }) {
     const running = runStatus === "running";
 
     const detailQuery = useQuery({
-        queryKey: ["pdd-product-detail", runId, selectedProductKey, token],
-        queryFn: () => fetchPDDProductDetail(runId, selectedProductKey, token),
+        queryKey: ["pdd-product-detail", dataSource.kind, dataSource.kind === "local" ? dataSource.baseUrl : token, runId, selectedProductKey],
+        queryFn: () => fetchPDDProductDetailForSource(dataSource, runId, selectedProductKey),
         enabled: Boolean(token && selectedProductKey),
         refetchInterval: selectedProductKey ? 3000 : false,
     });
@@ -157,21 +214,14 @@ function PDDRemoteRunClientPage({ runId }: { runId: string }) {
         void detailQuery.refetch();
     }, [overviewQuery.data?.run.updatedAt, selectedProductKey]);
 
-    if (!token || !user) {
-        return (
-            <main className="flex h-full items-center justify-center bg-background px-6 text-foreground">
-                <Card className="w-full max-w-md">
-                    <Typography.Title level={3}>需要登录</Typography.Title>
-                    <Typography.Paragraph type="secondary">请先登录管理员账号后查看电商工作流。</Typography.Paragraph>
-                    <Button type="primary" href="/login">
-                        去登录
-                    </Button>
-                </Card>
-            </main>
-        );
-    }
-
     const runAction = async (payload: PDDActionRequest) => {
+        if (dataSource.kind === "local") {
+            setActionOutput("本地 run 由 opsc executor --watch 处理。请确认 worker 已启动，页面会自动轮询最新状态。");
+            message.info("本地 run 由 opsc executor --watch 处理");
+            await overviewQuery.refetch();
+            if (selectedProductKey) await detailQuery.refetch();
+            return;
+        }
         try {
             const result = await runPDDAction(payload, token);
             setActionOutput(result.output || "ok");
@@ -184,6 +234,10 @@ function PDDRemoteRunClientPage({ runId }: { runId: string }) {
     };
 
     const confirmServiceAction = (payload: PDDActionRequest, title: string) => {
+        if (dataSource.kind === "local") {
+            void runAction(payload);
+            return;
+        }
         modal.confirm({
             title,
             content: "该动作会在 VPS 上执行受控命令，请确认当前没有关键任务被误中断。",
@@ -225,6 +279,10 @@ function PDDRemoteRunClientPage({ runId }: { runId: string }) {
     };
     const submitManualEdit = async () => {
         if (!manualEditTarget) return;
+        if (dataSource.kind === "local") {
+            message.info("本地创作画布请直接使用节点工具栏生成、替换或应用输出");
+            return;
+        }
         try {
             const values = await manualEditForm.validateFields();
             if (values.useMask && !manualMaskDataUrl) {
@@ -254,7 +312,7 @@ function PDDRemoteRunClientPage({ runId }: { runId: string }) {
             setManualEditTarget(null);
             await refreshAll();
             const first = result.artifacts?.[0];
-            if (first && !result.rerunDownstream) setLightbox({ title: first.title, src: withPDDFileToken(first.url, token), path: first.path });
+            if (first && !result.rerunDownstream) setLightbox({ title: first.title, src: withRunFileAccess(first.url, token), path: first.path });
         } catch (error) {
             message.error(error instanceof Error ? error.message : "人工编辑副本失败");
         } finally {
@@ -313,7 +371,7 @@ function PDDRemoteRunClientPage({ runId }: { runId: string }) {
                     }}
                     onOpenArtifact={(artifact, node, product) => {
                         setDrawer(null);
-                        setLightbox({ title: artifact.title, src: withPDDFileToken(artifact.url, token), path: artifact.path, artifact, node, product });
+                        setLightbox({ title: artifact.title, src: withRunFileAccess(artifact.url, token), path: artifact.path, artifact, node, product });
                     }}
                     onOpenImage={(image) => {
                         setDrawer(null);
@@ -375,29 +433,32 @@ function PDDRemoteRunClientPage({ runId }: { runId: string }) {
                     />
                 </Drawer>
                 <ImageLightbox image={lightbox} onClose={() => setLightbox(null)} />
-                <Modal title="人工编辑副本" open={Boolean(manualEditTarget)} okText={manualEditForm.getFieldValue("rerunDownstream") ? "生成并重跑后续" : "生成副本"} cancelText="取消" confirmLoading={manualEditSubmitting} onOk={submitManualEdit} onCancel={() => setManualEditTarget(null)} destroyOnClose>
+                <Modal
+                    title="人工编辑副本"
+                    open={Boolean(manualEditTarget)}
+                    okText={manualEditForm.getFieldValue("rerunDownstream") ? "生成并重跑后续" : "生成副本"}
+                    cancelText="取消"
+                    confirmLoading={manualEditSubmitting}
+                    onOk={submitManualEdit}
+                    onCancel={() => setManualEditTarget(null)}
+                    destroyOnHidden
+                >
                     <Form form={manualEditForm} layout="vertical" preserve={false}>
                         <Typography.Paragraph type="secondary" className="!mb-3 text-xs">
                             当前图片会作为参考图生成一个人工编辑副本；勾选应用后，会用副本接管当前节点输出并重跑当前商品的后续节点。
                         </Typography.Paragraph>
-	                        <Form.Item name="prompt" label="编辑要求" rules={[{ required: true, message: "请输入人工编辑要求" }]}>
-	                            <Input.TextArea rows={5} placeholder="描述希望如何修改这张图片" />
-	                        </Form.Item>
-	                        <Form.Item name="useMask" valuePropName="checked" extra="只支持 gpt-image-2 图片编辑。涂抹区域会作为需要修改的局部，其余区域尽量保持不变。">
-	                            <Switch checkedChildren="启用局部蒙版" unCheckedChildren="整图编辑" />
-	                        </Form.Item>
-	                        <Form.Item shouldUpdate noStyle>
-	                            {({ getFieldValue }) =>
-	                                getFieldValue("useMask") && manualEditTarget ? (
-	                                    <ManualMaskCanvas
-	                                        imageUrl={withPDDFileToken(manualEditTarget.artifact.url, token)}
-	                                        onChange={setManualMaskDataUrl}
-	                                        onClear={() => setManualMaskDataUrl("")}
-	                                    />
-	                                ) : null
-	                            }
-	                        </Form.Item>
-	                        <div className="grid grid-cols-2 gap-3">
+                        <Form.Item name="prompt" label="编辑要求" rules={[{ required: true, message: "请输入人工编辑要求" }]}>
+                            <Input.TextArea rows={5} placeholder="描述希望如何修改这张图片" />
+                        </Form.Item>
+                        <Form.Item name="useMask" valuePropName="checked" extra="只支持 gpt-image-2 图片编辑。涂抹区域会作为需要修改的局部，其余区域尽量保持不变。">
+                            <Switch checkedChildren="启用局部蒙版" unCheckedChildren="整图编辑" />
+                        </Form.Item>
+                        <Form.Item shouldUpdate noStyle>
+                            {({ getFieldValue }) =>
+                                getFieldValue("useMask") && manualEditTarget ? <ManualMaskCanvas imageUrl={withRunFileAccess(manualEditTarget.artifact.url, token)} onChange={setManualMaskDataUrl} onClear={() => setManualMaskDataUrl("")} /> : null
+                            }
+                        </Form.Item>
+                        <div className="grid grid-cols-2 gap-3">
                             <Form.Item name="model" label="模型" rules={[{ required: true, message: "请输入模型" }]}>
                                 <Input />
                             </Form.Item>
@@ -457,6 +518,65 @@ function defaultRunViewport(mode: RunViewMode): ViewportTransform {
     if (mode === "overview") return { x: 80, y: 92, k: 0.78 };
     if (mode === "creative") return { x: 120, y: 120, k: 0.82 };
     return { x: 120, y: 140, k: 0.72 };
+}
+
+function localPDDRunToken(baseUrl: string) {
+    return `local:${encodeURIComponent(baseUrl)}`;
+}
+
+function isLocalPDDRunToken(token: string) {
+    return token.startsWith("local:");
+}
+
+function localPDDRunBaseUrl(token: string) {
+    if (!isLocalPDDRunToken(token)) return "";
+    try {
+        return decodeURIComponent(token.slice("local:".length)).replace(/\/+$/, "");
+    } catch {
+        return "";
+    }
+}
+
+function withRunFileAccess(url: string, token: string) {
+    if (!url || !isLocalPDDRunToken(token)) return withPDDFileToken(url, token);
+    if (url.startsWith("data:") || url.startsWith("blob:") || /^https?:/i.test(url)) return url;
+    const baseUrl = localPDDRunBaseUrl(token);
+    if (baseUrl && url.startsWith("/api/local/")) return `${baseUrl}${url}`;
+    return url;
+}
+
+async function fetchPDDRunOverviewForSource(source: PDDRunDataSource, runId: string) {
+    if (source.kind === "local") return fetchLocalPDDRunOverview(source.baseUrl, runId);
+    return fetchPDDRunOverview(runId, source.token);
+}
+
+async function fetchPDDProductDetailForSource(source: PDDRunDataSource, runId: string, productKey: string) {
+    if (source.kind === "local") return fetchLocalPDDProductDetail(source.baseUrl, runId, productKey);
+    return fetchPDDProductDetail(runId, productKey, source.token);
+}
+
+async function fetchPDDCreativeCanvasForToken(runId: string, productKey: string, token: string) {
+    const baseUrl = localPDDRunBaseUrl(token);
+    if (baseUrl) return fetchLocalPDDCreativeCanvas(baseUrl, runId, productKey);
+    return fetchPDDCreativeCanvas(runId, productKey, token);
+}
+
+async function savePDDCreativeCanvasForToken(runId: string, productKey: string, payload: Parameters<typeof savePDDCreativeCanvas>[2], token: string) {
+    const baseUrl = localPDDRunBaseUrl(token);
+    if (baseUrl) return saveLocalPDDCreativeCanvas(baseUrl, runId, productKey, payload);
+    return savePDDCreativeCanvas(runId, productKey, payload, token);
+}
+
+async function uploadPDDCreativeCanvasAssetForToken(runId: string, productKey: string, payload: Parameters<typeof uploadPDDCreativeCanvasAsset>[2], token: string) {
+    const baseUrl = localPDDRunBaseUrl(token);
+    if (baseUrl) return uploadLocalPDDCreativeCanvasAsset(baseUrl, runId, productKey, payload);
+    return uploadPDDCreativeCanvasAsset(runId, productKey, payload, token);
+}
+
+async function applyPDDCreativeCanvasOutputForToken(runId: string, productKey: string, payload: Parameters<typeof applyPDDCreativeCanvasOutput>[2], token: string) {
+    const baseUrl = localPDDRunBaseUrl(token);
+    if (baseUrl) return applyLocalPDDCreativeCanvasOutput(baseUrl, runId, productKey, payload);
+    return applyPDDCreativeCanvasOutput(runId, productKey, payload, token);
 }
 
 function RunBottomToolbar({
@@ -756,7 +876,7 @@ function RunCreativeCanvas({
 
     const canvasQuery = useQuery({
         queryKey: ["pdd-creative-canvas", runId, productKey, token],
-        queryFn: () => fetchPDDCreativeCanvas(runId, productKey, token),
+        queryFn: () => fetchPDDCreativeCanvasForToken(runId, productKey, token),
         enabled: Boolean(token && runId && productKey),
         refetchOnWindowFocus: false,
         refetchInterval: runningNodeId || applyingNodeId || cropSubmitting || angleSubmitting ? false : 3000,
@@ -893,19 +1013,22 @@ function RunCreativeCanvas({
         window.setTimeout(() => fileInputRef.current?.click(), 0);
     }, []);
 
-    const downloadNode = useCallback((node: CanvasNodeData) => {
-        const content = typeof node.metadata?.content === "string" ? node.metadata.content : "";
-        if (!content) {
-            message.warning("当前节点没有可下载的内容");
-            return;
-        }
-        const suffix = node.type === CanvasNodeType.Video ? "mp4" : node.type === CanvasNodeType.Text ? "txt" : "png";
-        if (node.type === CanvasNodeType.Text) {
-            saveAs(new Blob([content], { type: "text/plain;charset=utf-8" }), `${safeDownloadName(node.title || node.id)}.${suffix}`);
-            return;
-        }
-        saveAs(content, `${safeDownloadName(node.title || node.id)}.${suffix}`);
-    }, [message]);
+    const downloadNode = useCallback(
+        (node: CanvasNodeData) => {
+            const content = typeof node.metadata?.content === "string" ? node.metadata.content : "";
+            if (!content) {
+                message.warning("当前节点没有可下载的内容");
+                return;
+            }
+            const suffix = node.type === CanvasNodeType.Video ? "mp4" : node.type === CanvasNodeType.Text ? "txt" : "png";
+            if (node.type === CanvasNodeType.Text) {
+                saveAs(new Blob([content], { type: "text/plain;charset=utf-8" }), `${safeDownloadName(node.title || node.id)}.${suffix}`);
+                return;
+            }
+            saveAs(content, `${safeDownloadName(node.title || node.id)}.${suffix}`);
+        },
+        [message],
+    );
 
     const openNodePreview = useCallback(
         (node: CanvasNodeData) => {
@@ -975,9 +1098,9 @@ function RunCreativeCanvas({
     const uploadCreativeDataUrl = useCallback(
         async (nodeId: string, content: string | Blob, fileName: string, mimeType?: string) => {
             const dataUrl = await ensureCreativeDataUrl(content, mimeType);
-            const asset = await uploadPDDCreativeCanvasAsset(runId, productKey, { nodeId, fileName, mimeType, content: dataUrl }, token);
+            const asset = await uploadPDDCreativeCanvasAssetForToken(runId, productKey, { nodeId, fileName, mimeType, content: dataUrl }, token);
             return {
-                content: withPDDFileToken(asset.url, token),
+                content: withRunFileAccess(asset.url, token),
                 artifactPath: asset.path,
                 storageKey: asset.path,
                 mimeType: asset.mimeType,
@@ -1093,7 +1216,9 @@ function RunCreativeCanvas({
                     await Promise.all(
                         childNodes.map(async (child) => {
                             try {
-                                const image = referenceImages.length ? await requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages).then((items) => items[0]) : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt).then((items) => items[0]);
+                                const image = referenceImages.length
+                                    ? await requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages).then((items) => items[0])
+                                    : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt).then((items) => items[0]);
                                 const asset = await uploadCreativeDataUrl(child.id, image.dataUrl, `${child.id}.png`, "image/png");
                                 const size = asset.naturalWidth && asset.naturalHeight ? fitCreativeMediaNodeSize(CanvasNodeType.Image, asset.naturalWidth, asset.naturalHeight) : imageSpec;
                                 setNodes((current) =>
@@ -1125,7 +1250,14 @@ function RunCreativeCanvas({
                         position: sourceNode.position,
                         width: spec.width,
                         height: spec.height,
-                        metadata: createGeneratedNodeMetadata(sourceNode, effectivePrompt, { model: generationConfig.model, size: generationConfig.size, seconds: generationConfig.videoSeconds, vquality: generationConfig.vquality, videoReferenceMode: generationConfig.videoReferenceMode, references: context.referenceImages.map(referenceUrl).filter((url): url is string => Boolean(url)) }),
+                        metadata: createGeneratedNodeMetadata(sourceNode, effectivePrompt, {
+                            model: generationConfig.model,
+                            size: generationConfig.size,
+                            seconds: generationConfig.videoSeconds,
+                            vquality: generationConfig.vquality,
+                            videoReferenceMode: generationConfig.videoReferenceMode,
+                            references: context.referenceImages.map(referenceUrl).filter((url): url is string => Boolean(url)),
+                        }),
                     });
                     const video = await requestVideoGeneration(generationConfig, effectivePrompt, context.referenceImages);
                     const asset = await uploadCreativeDataUrl(child.id, video, `${child.id}.mp4`, video.type || "video/mp4");
@@ -1307,12 +1439,7 @@ function RunCreativeCanvas({
                 message.warning("找不到提示词，无法重试");
                 return;
             }
-            const references =
-                hasSavedImageMetadata && savedImageMetadata
-                    ? await resolveCreativeMetadataReferences(runId, token, savedImageMetadata)
-                    : context?.referenceImages.length
-                      ? context.referenceImages
-                      : sourceNodeReferenceImages(sourceNode);
+            const references = hasSavedImageMetadata && savedImageMetadata ? await resolveCreativeMetadataReferences(runId, token, savedImageMetadata) : context?.referenceImages.length ? context.referenceImages : sourceNodeReferenceImages(sourceNode);
             if (references === null) {
                 message.error("参考图片已丢失，无法继续重试");
                 setNodes((current) => current.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: "error", errorDetails: "参考图片已丢失，无法继续重试" } } : item)));
@@ -1335,15 +1462,38 @@ function RunCreativeCanvas({
                 if (node.type === CanvasNodeType.Video) {
                     const video = await requestVideoGeneration(generationConfig, prompt, references || []);
                     const asset = await uploadCreativeDataUrl(node.id, video, `${node.id}.mp4`, video.type || "video/mp4");
-                    setNodes((current) => current.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, ...asset, prompt, model: generationConfig.model, size: generationConfig.size, seconds: generationConfig.videoSeconds, vquality: generationConfig.vquality, videoReferenceMode: generationConfig.videoReferenceMode, status: "success" } } : item)));
+                    setNodes((current) =>
+                        current.map((item) =>
+                            item.id === node.id
+                                ? {
+                                      ...item,
+                                      metadata: {
+                                          ...item.metadata,
+                                          ...asset,
+                                          prompt,
+                                          model: generationConfig.model,
+                                          size: generationConfig.size,
+                                          seconds: generationConfig.videoSeconds,
+                                          vquality: generationConfig.vquality,
+                                          videoReferenceMode: generationConfig.videoReferenceMode,
+                                          status: "success",
+                                      },
+                                  }
+                                : item,
+                        ),
+                    );
                     return;
                 }
                 const referenceImages = references || [];
                 const image = referenceImages.length ? await requestEdit(generationConfig, prompt, referenceImages).then((items) => items[0]) : await requestGeneration(generationConfig, prompt).then((items) => items[0]);
                 const asset = await uploadCreativeDataUrl(node.id, image.dataUrl, `${node.id}.png`, "image/png");
                 const size = asset.naturalWidth && asset.naturalHeight ? fitCreativeMediaNodeSize(CanvasNodeType.Image, asset.naturalWidth, asset.naturalHeight) : NODE_DEFAULT_SIZE[CanvasNodeType.Image];
-                const generationMetadata = savedImageMetadata?.generationType ? { generationType: savedImageMetadata.generationType, model: generationConfig.model, size: generationConfig.size, quality: generationConfig.quality, count: savedImageMetadata.count || 1, references: savedImageMetadata.references } : buildCreativeImageGenerationMetadata(referenceImages.length ? "edit" : "generation", generationConfig, 1, referenceImages);
-                setNodes((current) => current.map((item) => (item.id === node.id ? { ...item, type: CanvasNodeType.Image, width: size.width, height: size.height, metadata: { ...item.metadata, ...asset, prompt, ...generationMetadata, status: "success" } } : item)));
+                const generationMetadata = savedImageMetadata?.generationType
+                    ? { generationType: savedImageMetadata.generationType, model: generationConfig.model, size: generationConfig.size, quality: generationConfig.quality, count: savedImageMetadata.count || 1, references: savedImageMetadata.references }
+                    : buildCreativeImageGenerationMetadata(referenceImages.length ? "edit" : "generation", generationConfig, 1, referenceImages);
+                setNodes((current) =>
+                    current.map((item) => (item.id === node.id ? { ...item, type: CanvasNodeType.Image, width: size.width, height: size.height, metadata: { ...item.metadata, ...asset, prompt, ...generationMetadata, status: "success" } } : item)),
+                );
             } catch (error) {
                 const errorDetails = error instanceof Error ? error.message : "生成失败";
                 setNodes((current) => current.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: "error", errorDetails } } : item)));
@@ -1378,7 +1528,7 @@ function RunCreativeCanvas({
                     setApplyingNodeId(node.id);
                     try {
                         const payloadContent = artifactPath ? undefined : node.type === CanvasNodeType.Text ? content : await ensureCreativeDataUrl(content, node.metadata?.mimeType);
-                        const result = await applyPDDCreativeCanvasOutput(
+                        const result = await applyPDDCreativeCanvasOutputForToken(
                             runId,
                             productKey,
                             {
@@ -1415,8 +1565,8 @@ function RunCreativeCanvas({
             const nodeId = target.nodeId || `creative-${kind}-${Date.now().toString(36)}`;
             try {
                 const dataUrl = await readCreativeFileAsDataURL(file);
-                const asset = await uploadPDDCreativeCanvasAsset(runId, productKey, { nodeId, fileName: file.name, mimeType: file.type || undefined, content: dataUrl }, token);
-                const content = withPDDFileToken(asset.url, token);
+                const asset = await uploadPDDCreativeCanvasAssetForToken(runId, productKey, { nodeId, fileName: file.name, mimeType: file.type || undefined, content: dataUrl }, token);
+                const content = withRunFileAccess(asset.url, token);
                 const title = file.name.replace(/\.[^.]+$/, "") || file.name;
                 recordHistory();
                 if (target.nodeId) {
@@ -1567,11 +1717,11 @@ function RunCreativeCanvas({
             return;
         }
         savingRef.current = true;
-        void savePDDCreativeCanvas(
+        void savePDDCreativeCanvasForToken(
             runId,
             productKey,
             {
-                nodes: dehydrateCreativeNodes(nodesRef.current),
+                nodes: dehydrateCreativeNodes(nodesRef.current, token),
                 edges: connectionsRef.current,
                 viewport: viewportRef.current,
                 backgroundMode: backgroundModeRef.current,
@@ -1707,7 +1857,10 @@ function RunCreativeCanvas({
                         data={node}
                         scale={viewport.k}
                         isSelected={selectedNodeIds.has(node.id)}
-                        isRelated={Boolean(toolbarNode && (connections.some((connection) => connection.fromNodeId === toolbarNode.id && connection.toNodeId === node.id) || connections.some((connection) => connection.toNodeId === toolbarNode.id && connection.fromNodeId === node.id)))}
+                        isRelated={Boolean(
+                            toolbarNode &&
+                            (connections.some((connection) => connection.fromNodeId === toolbarNode.id && connection.toNodeId === node.id) || connections.some((connection) => connection.toNodeId === toolbarNode.id && connection.fromNodeId === node.id)),
+                        )}
                         isFocusRelated={toolbarNode?.id === node.id}
                         isConnectionTarget={Boolean(connecting && connecting.nodeId !== node.id)}
                         isConnecting={Boolean(connecting)}
@@ -1737,7 +1890,11 @@ function RunCreativeCanvas({
                                     inputSummary={getInputSummary(inputs)}
                                     inputs={inputs}
                                     onConfigChange={handleConfigNodeChange}
-                                    onTextInputChange={(nodeId, content) => setNodes((current) => current.map((item) => (item.id === nodeId ? { ...item, metadata: { ...item.metadata, content, source: item.type === CanvasNodeType.Text ? "creative_text_edit" : item.metadata?.source } } : item)))}
+                                    onTextInputChange={(nodeId, content) =>
+                                        setNodes((current) =>
+                                            current.map((item) => (item.id === nodeId ? { ...item, metadata: { ...item.metadata, content, source: item.type === CanvasNodeType.Text ? "creative_text_edit" : item.metadata?.source } } : item)),
+                                        )
+                                    }
                                     onGenerate={(nodeId) => {
                                         const target = nodesRef.current.find((item) => item.id === nodeId);
                                         void handleGenerateNode(nodeId, target?.metadata?.generationMode || "image", target?.metadata?.prompt || "");
@@ -1861,8 +2018,12 @@ function RunCreativeCanvas({
                 onOpenAssets={() => message.info("请在顶部素材中心管理长期素材；当前画布支持直接上传图片/视频。")}
             />
             <CanvasNodeInfoModal node={infoNode} open={Boolean(infoNode)} onClose={() => setInfoNodeId("")} />
-            {cropNode?.metadata?.content ? <CanvasNodeCropDialog dataUrl={cropNode.metadata.content} open={Boolean(cropNode)} confirming={cropSubmitting} onClose={() => setCropNodeId(null)} onConfirm={(crop) => void cropImageNode(cropNode, crop)} /> : null}
-            {angleNode?.metadata?.content ? <CanvasNodeAngleDialog dataUrl={angleNode.metadata.content} open={Boolean(angleNode)} confirming={angleSubmitting} onClose={() => setAngleNodeId(null)} onConfirm={(params) => void generateAngleNode(angleNode, params)} /> : null}
+            {cropNode?.metadata?.content ? (
+                <CanvasNodeCropDialog dataUrl={cropNode.metadata.content} open={Boolean(cropNode)} confirming={cropSubmitting} onClose={() => setCropNodeId(null)} onConfirm={(crop) => void cropImageNode(cropNode, crop)} />
+            ) : null}
+            {angleNode?.metadata?.content ? (
+                <CanvasNodeAngleDialog dataUrl={angleNode.metadata.content} open={Boolean(angleNode)} confirming={angleSubmitting} onClose={() => setAngleNodeId(null)} onConfirm={(params) => void generateAngleNode(angleNode, params)} />
+            ) : null}
             <input ref={fileInputRef} type="file" accept={fileInputAccept} className="hidden" onChange={handleFileInput} />
         </div>
     );
@@ -2108,8 +2269,8 @@ async function resolveCreativeMetadataReferences(runId: string, token: string, m
 
 function creativeReferenceURL(runId: string, token: string, value: string) {
     if (value.startsWith("data:") || value.startsWith("blob:") || /^https?:/i.test(value)) return value;
-    if (value.startsWith("/api/workflows/pdd/")) return withPDDFileToken(value, token);
-    if (value.includes("/") || value.includes("\\")) return withPDDFileToken(`/api/workflows/pdd/runs/${encodeURIComponent(runId)}/file?path=${encodeURIComponent(value)}`, token);
+    if (value.startsWith("/api/workflows/pdd/")) return withRunFileAccess(value, token);
+    if (value.includes("/") || value.includes("\\")) return withRunFileAccess(`/api/workflows/pdd/runs/${encodeURIComponent(runId)}/file?path=${encodeURIComponent(value)}`, token);
     return value;
 }
 
@@ -2133,8 +2294,8 @@ function buildAnglePrompt(params: CanvasImageAngleParams) {
 function hydrateCreativeNodes(canvas: PDDCreativeCanvas, token: string): CanvasNodeData[] {
     return (canvas.nodes || []).map((node) => {
         const metadata = { ...(node.metadata || {}) } as NonNullable<CanvasNodeData["metadata"]>;
-        if (typeof metadata.content === "string" && metadata.content.startsWith("/api/workflows/pdd/")) {
-            metadata.content = withPDDFileToken(metadata.content, token);
+        if (typeof metadata.content === "string" && (metadata.content.startsWith("/api/workflows/pdd/") || metadata.content.startsWith("/api/local/"))) {
+            metadata.content = withRunFileAccess(metadata.content, token);
         }
         if ((metadata as Record<string, unknown>).status === "running") metadata.status = "loading";
         return {
@@ -2149,11 +2310,13 @@ function hydrateCreativeNodes(canvas: PDDCreativeCanvas, token: string): CanvasN
     });
 }
 
-function dehydrateCreativeNodes(nodes: CanvasNodeData[]) {
+function dehydrateCreativeNodes(nodes: CanvasNodeData[], token: string) {
     return nodes.map((node) => {
         const metadata = { ...(node.metadata || {}) };
         if (typeof metadata.content === "string" && metadata.content.includes("/api/workflows/pdd/")) {
             metadata.content = stripTokenFromURL(metadata.content);
+        } else if (typeof metadata.content === "string" && metadata.content.includes("/api/local/")) {
+            metadata.content = stripLocalRunBaseUrl(metadata.content, token);
         }
         return {
             id: node.id,
@@ -2284,11 +2447,23 @@ function stripTokenFromURL(value: string) {
     }
 }
 
+function stripLocalRunBaseUrl(value: string, token: string) {
+    const baseUrl = localPDDRunBaseUrl(token);
+    if (baseUrl && value.startsWith(`${baseUrl}/api/local/`)) return value.slice(baseUrl.length);
+    try {
+        const url = new URL(value, window.location.origin);
+        if (url.pathname.startsWith("/api/local/")) return `${url.pathname}${url.search}`;
+    } catch {
+        // Keep non-URL content unchanged.
+    }
+    return value;
+}
+
 function screenToWorld(clientX: number, clientY: number, container: HTMLDivElement | null, viewport: ViewportTransform): Position {
     const rect = container?.getBoundingClientRect();
     return {
-        x: ((clientX - (rect?.left || 0)) - viewport.x) / viewport.k,
-        y: ((clientY - (rect?.top || 0)) - viewport.y) / viewport.k,
+        x: (clientX - (rect?.left || 0) - viewport.x) / viewport.k,
+        y: (clientY - (rect?.top || 0) - viewport.y) / viewport.k,
     };
 }
 
@@ -2462,7 +2637,7 @@ function ProductGraphNode({
                                     onOpenArtifact(artifact, node, product);
                                 }}
                             >
-                                <img src={withPDDFileToken(artifact.url, token)} alt={artifact.title} width={64} height={64} className="size-16 object-cover" draggable={false} />
+                                <img src={withRunFileAccess(artifact.url, token)} alt={artifact.title} width={64} height={64} className="size-16 object-cover" draggable={false} />
                             </button>
                         </Tooltip>
                     ))}
@@ -2512,7 +2687,7 @@ function DetailPanel({
     useEffect(() => {
         if (!activeFile || activeFile.kind === "image") return;
         let cancelled = false;
-        void fetch(withPDDFileToken(activeFile.url, token))
+        void fetch(withRunFileAccess(activeFile.url, token), { credentials: isLocalPDDRunToken(token) ? "include" : "same-origin" })
             .then((response) => response.text())
             .then((text) => {
                 if (!cancelled) setFileText(text);
@@ -2527,6 +2702,10 @@ function DetailPanel({
 
     useEffect(() => {
         if (!token) return;
+        if (isLocalPDDRunToken(token)) {
+            setLogText("本地 run 事件由 opsc serve 提供；当前日志面板不连接远端日志流。");
+            return;
+        }
         const source = new EventSource(`/api/workflows/pdd/runs/${encodeURIComponent(runId)}/log-stream?token=${encodeURIComponent(token)}`);
         source.onmessage = (event) => {
             setLogText((current) => `${current}\n${event.data}`.slice(-12000));
@@ -2688,7 +2867,7 @@ function CompactPreBlock({ title, value }: { title: string; value: string }) {
 }
 
 function ArtifactPreview({ artifact, token, onOpenImage }: { artifact: PDDArtifact; token: string; onOpenImage: (image: { title: string; src: string; path: string }) => void }) {
-    const src = withPDDFileToken(artifact.url, token);
+    const src = withRunFileAccess(artifact.url, token);
     return (
         <Card
             size="small"
@@ -2709,7 +2888,7 @@ function ArtifactPreview({ artifact, token, onOpenImage }: { artifact: PDDArtifa
 function FileViewer({ file, token, text, onOpenImage }: { file: PDDDetailFile | null; token: string; text: string; onOpenImage: (image: { title: string; src: string; path: string }) => void }) {
     if (!file) return <div className="flex items-center justify-center text-sm text-stone-500">选择一个文件查看内容</div>;
     if (file.kind === "image") {
-        const src = withPDDFileToken(file.url, token);
+        const src = withRunFileAccess(file.url, token);
         return (
             <button type="button" className="flex h-full min-h-[220px] w-full items-center justify-center overflow-hidden rounded-lg bg-white dark:bg-stone-950" onClick={() => onOpenImage({ title: file.title, src, path: file.path })}>
                 <img src={src} alt={file.title} className="max-h-[640px] w-full object-contain" draggable={false} />
@@ -2965,7 +3144,11 @@ function ManualMaskCanvas({ imageUrl, onChange, onClear }: { imageUrl: string; o
             <div className="flex flex-wrap items-center justify-between gap-2">
                 <Typography.Text className="text-sm font-medium">局部蒙版</Typography.Text>
                 <Space>
-                    <InputNumber min={12} max={160} value={brushSize} addonBefore="笔刷" addonAfter="px" onChange={(value) => setBrushSize(Number(value || 48))} />
+                    <Space.Compact>
+                        <span className="inline-flex h-8 shrink-0 items-center rounded-l-md border border-r-0 border-stone-300 bg-stone-50 px-3 text-sm text-stone-600 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300">笔刷</span>
+                        <InputNumber min={12} max={160} value={brushSize} onChange={(value) => setBrushSize(Number(value || 48))} />
+                        <span className="inline-flex h-8 shrink-0 items-center rounded-r-md border border-l-0 border-stone-300 bg-stone-50 px-3 text-sm text-stone-600 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300">px</span>
+                    </Space.Compact>
                     <Button onClick={resetMask}>清空</Button>
                 </Space>
             </div>
@@ -2974,14 +3157,7 @@ function ManualMaskCanvas({ imageUrl, onChange, onClear }: { imageUrl: string; o
             </Typography.Text>
             <div className="max-h-[420px] overflow-auto rounded-lg bg-stone-950/5 p-2 dark:bg-black/30">
                 <div className="relative inline-block max-w-full">
-                    <img
-                        ref={imageRef}
-                        src={imageUrl}
-                        alt="蒙版参考图"
-                        className="block max-h-[390px] max-w-full select-none object-contain"
-                        draggable={false}
-                        onLoad={resetMask}
-                    />
+                    <img ref={imageRef} src={imageUrl} alt="蒙版参考图" className="block max-h-[390px] max-w-full select-none object-contain" draggable={false} onLoad={resetMask} />
                     <canvas
                         ref={overlayRef}
                         className="absolute inset-0 h-full w-full cursor-crosshair touch-none"

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { ComponentProps } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
@@ -178,9 +179,7 @@ export default function PDDRunsPage() {
                         <Button
                             icon={<RefreshCw className="size-4" />}
                             loading={query.isFetching || localRunsQuery.isFetching}
-                            onClick={() =>
-                                void Promise.all([token ? query.refetch() : Promise.resolve(), localConnected ? localRunsQuery.refetch() : Promise.resolve()]).catch((error) => message.error(error instanceof Error ? error.message : "刷新失败"))
-                            }
+                            onClick={() => void Promise.all([token ? query.refetch() : Promise.resolve(), localConnected ? localRunsQuery.refetch() : Promise.resolve()]).catch((error) => message.error(error instanceof Error ? error.message : "刷新失败"))}
                         >
                             刷新
                         </Button>
@@ -288,10 +287,24 @@ function StartRunModal({
     };
 
     return (
-        <Modal title={useLocalTemplates ? "启动本地电商工作流" : "启动电商工作流"} open={open} onCancel={onCancel} width={820} destroyOnClose={false} footer={<Space><Button onClick={onCancel}>取消</Button><Button type="primary" icon={<Play className="size-4" />} loading={loading} onClick={submit}>启动</Button></Space>}>
+        <Modal
+            title={useLocalTemplates ? "启动本地电商工作流" : "启动电商工作流"}
+            open={open}
+            onCancel={onCancel}
+            width={820}
+            destroyOnHidden={false}
+            footer={
+                <Space>
+                    <Button onClick={onCancel}>取消</Button>
+                    <Button type="primary" icon={<Play className="size-4" />} loading={loading} onClick={submit}>
+                        启动
+                    </Button>
+                </Space>
+            }
+        >
             <div className="flex flex-col gap-4">
                 <Card size="small" title="选择模板">
-                    <Space direction="vertical" className="w-full">
+                    <Space orientation="vertical" className="w-full">
                         <Select
                             className="w-full"
                             loading={templateQuery.isLoading}
@@ -300,20 +313,46 @@ function StartRunModal({
                             options={templates.map((item: WorkflowTemplate) => ({ label: item.title, value: item.id }))}
                             onChange={setTemplateId}
                         />
-                        {selectedTemplate ? <Typography.Text type="secondary" className="text-xs">{selectedTemplate.description || "无模板说明"} · {selectedTemplate.spec.nodes.length} 节点 / {selectedTemplate.spec.edges.length} 连线</Typography.Text> : null}
+                        {selectedTemplate ? (
+                            <Typography.Text type="secondary" className="text-xs">
+                                {selectedTemplate.description || "无模板说明"} · {selectedTemplate.spec.nodes.length} 节点 / {selectedTemplate.spec.edges.length} 连线
+                            </Typography.Text>
+                        ) : null}
                     </Space>
                 </Card>
                 <Card size="small" title="运行参数">
                     <div className="grid grid-cols-2 gap-3">
-                        <InputNumber className="!w-full" min={1} max={20} value={productConcurrency ?? selectedTemplate?.spec.settings.productConcurrency ?? 2} addonBefore="商品并发" onChange={(value) => setProductConcurrency(Number(value || 1))} />
-                        <InputNumber className="!w-full" min={0} max={100} value={maxRetries ?? selectedTemplate?.spec.settings.maxRetries ?? 0} addonBefore="重试" onChange={(value) => setMaxRetries(Number(value ?? 0))} />
+                        <LabeledNumberInput label="商品并发" min={1} max={20} value={productConcurrency ?? selectedTemplate?.spec.settings.productConcurrency ?? 2} onChange={(value) => setProductConcurrency(Number(value || 1))} />
+                        <LabeledNumberInput label="重试" min={0} max={100} value={maxRetries ?? selectedTemplate?.spec.settings.maxRetries ?? 0} onChange={(value) => setMaxRetries(Number(value ?? 0))} />
                     </div>
                 </Card>
-                <Card size="small" title="输入商品" extra={<Upload accept=".json,application/json" showUploadList={false} beforeUpload={importJson}><Button icon={<UploadIcon className="size-4" />}>导入 JSON</Button></Upload>}>
-                    <Input.TextArea value={themesText} onChange={(event) => setThemesText(event.target.value)} rows={9} placeholder={'每行一个 JSON 对象：\n{"theme":"《原神》","character":"七七","presentation":"feminine"}\n{"theme":"《原神》","character":"丽莎","presentation":"feminine"}\n\n也可以粘贴 JSON 数组或 {"themes":[...]}'} />
+                <Card
+                    size="small"
+                    title="输入商品"
+                    extra={
+                        <Upload accept=".json,application/json" showUploadList={false} beforeUpload={importJson}>
+                            <Button icon={<UploadIcon className="size-4" />}>导入 JSON</Button>
+                        </Upload>
+                    }
+                >
+                    <Input.TextArea
+                        value={themesText}
+                        onChange={(event) => setThemesText(event.target.value)}
+                        rows={9}
+                        placeholder={'每行一个 JSON 对象：\n{"theme":"《原神》","character":"七七","presentation":"feminine"}\n{"theme":"《原神》","character":"丽莎","presentation":"feminine"}\n\n也可以粘贴 JSON 数组或 {"themes":[...]}'}
+                    />
                 </Card>
             </div>
         </Modal>
+    );
+}
+
+function LabeledNumberInput({ label, ...props }: ComponentProps<typeof InputNumber> & { label: string }) {
+    return (
+        <Space.Compact className="w-full">
+            <span className="inline-flex h-8 shrink-0 items-center rounded-l-md border border-r-0 border-stone-300 bg-stone-50 px-3 text-sm text-stone-600 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300">{label}</span>
+            <InputNumber {...props} className="!w-full" />
+        </Space.Compact>
     );
 }
 
@@ -328,18 +367,22 @@ function parseTemplateInputs(text: string) {
         }
     }
     const items: Array<Record<string, unknown>> = [];
-    value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).forEach((line, index) => {
-        if (line.startsWith("{") || line.startsWith("[")) {
-            try {
-                items.push(...parsedInputItems(JSON.parse(line)).map(normalizeInput));
-            } catch (error) {
-                const reason = error instanceof Error ? error.message : "JSON 格式不正确";
-                throw new Error(`第 ${index + 1} 行 JSON 格式不正确：${reason}`);
+    value
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .forEach((line, index) => {
+            if (line.startsWith("{") || line.startsWith("[")) {
+                try {
+                    items.push(...parsedInputItems(JSON.parse(line)).map(normalizeInput));
+                } catch (error) {
+                    const reason = error instanceof Error ? error.message : "JSON 格式不正确";
+                    throw new Error(`第 ${index + 1} 行 JSON 格式不正确：${reason}`);
+                }
+                return;
             }
-            return;
-        }
-        items.push({ theme: line });
-    });
+            items.push({ theme: line });
+        });
     return items;
 }
 

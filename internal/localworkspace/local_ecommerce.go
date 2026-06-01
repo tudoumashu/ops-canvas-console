@@ -14,6 +14,8 @@ const (
 	localEcommerceMaterialLibrary    = "anime_ip"
 	localEcommerceMaterialLibraryEnv = "OPSC_LOCAL_ECOMMERCE_MATERIAL_LIBRARY"
 	defaultEcommerceProjectOutRoot   = "outputs/ecommerce"
+	localEcommerceImageSize          = "1024x1024"
+	localEcommerceImageQuality       = "low"
 )
 
 type LocalEcommerceImportOptions struct {
@@ -209,6 +211,12 @@ func localizeEcommerceTemplateNodes(rawNodes []json.RawMessage, materialLibraryP
 					extra["outputRoot"] = defaultEcommerceProjectOutRoot
 				}
 			}
+		case "image_edit", "image_generation":
+			node["size"] = localEcommerceImageSize
+			node["quality"] = localEcommerceImageQuality
+			if prompt, ok := localEcommerceSourceImagePrompt(nodeID, strings.TrimSpace(stringFromAny(node["title"]))); ok {
+				node["prompt"] = prompt
+			}
 		}
 		node["extra"] = extra
 		encoded, err := json.Marshal(node)
@@ -218,6 +226,26 @@ func localizeEcommerceTemplateNodes(rawNodes []json.RawMessage, materialLibraryP
 		out = append(out, encoded)
 	}
 	return out, nil
+}
+
+func localEcommerceSourceImagePrompt(nodeID string, title string) (string, bool) {
+	variant := ""
+	lookup := strings.ToLower(strings.TrimSpace(nodeID)) + " " + strings.ToLower(strings.TrimSpace(title))
+	switch {
+	case strings.Contains(lookup, "3d") || strings.Contains(title, "3D"):
+		variant = "3D anime product art"
+	case strings.Contains(lookup, "korean") || strings.Contains(lookup, "semireal") || strings.Contains(title, "韩式") || strings.Contains(title, "半写实"):
+		variant = "Korean semi-realistic game illustration"
+	case strings.Contains(lookup, "japanese") || strings.Contains(title, "日式"):
+		variant = "Japanese 2D anime official art style"
+	default:
+		return "", false
+	}
+	return "Uploaded image order: {{uploaded_image_order}}\n\n" +
+		"Use image 1 as reference. Generate one safe fully clothed ecommerce source image of {{input.character}} from {{input.theme}}, {{input.presentation}} presentation. " +
+		"Preserve identity, face, hairstyle, outfit motifs, color palette, accessories, and silhouette. " +
+		"Style: " + variant + ". Full body, white bedsheet background, two outfit variants side by side, soft lighting. " +
+		"No visible text, watermark, border, pillow mockup, nudity, intimate framing, deformed body, bad hands, or extra limbs.", true
 }
 
 func findLocalEcommerceTemplate(workspace Workspace, remoteTemplateID string) (Envelope[TemplateData], bool, error) {

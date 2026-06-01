@@ -402,6 +402,26 @@ func (api *serveAPI) handleRunRoute(w http.ResponseWriter, r *http.Request, loca
 			return
 		}
 		writeServeSuccess(w, snapshot, nil)
+	case len(parts) == 2 && parts[1] == "pdd-overview" && r.Method == http.MethodGet:
+		overview, err := buildLocalPDDRunOverview(api.workspace, runID, api.runtime.BaseURL)
+		if err != nil {
+			writeServeErrorFromError(w, err)
+			return
+		}
+		writeServeSuccess(w, overview, nil)
+	case len(parts) == 2 && parts[1] == "pdd-product-detail" && r.Method == http.MethodGet:
+		detail, err := buildLocalPDDProductDetail(api.workspace, runID, r.URL.Query().Get("key"), api.runtime.BaseURL)
+		if err != nil {
+			writeServeErrorFromError(w, err)
+			return
+		}
+		writeServeSuccess(w, detail, nil)
+	case len(parts) == 2 && parts[1] == "creative-canvas":
+		api.handleLocalPDDCreativeCanvas(w, r, runID)
+	case len(parts) == 3 && parts[1] == "creative-canvas" && parts[2] == "assets":
+		api.handleLocalPDDCreativeCanvasAsset(w, r, runID)
+	case len(parts) == 3 && parts[1] == "creative-canvas" && parts[2] == "apply":
+		api.handleLocalPDDCreativeCanvasApply(w, r, runID)
 	case len(parts) == 2 && parts[1] == "events" && r.Method == http.MethodGet:
 		after, err := parseAfterSequence(r)
 		if err != nil {

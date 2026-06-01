@@ -5,6 +5,8 @@
     "type": "module",
     "scripts": {
         "dev": "next dev --webpack -H 0.0.0.0 -p 3000",
+        "local:dev": "next dev --webpack -H 0.0.0.0 -p 3000",
+        "local:prod": "next build && next start -H 0.0.0.0 -p 3000",
         "build": "next build",
         "start": "next start",
         "format": "prettier --write .",

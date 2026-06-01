@@ -439,33 +439,29 @@ export default function AdminSettingsPage() {
                                             <Select showSearch allowClear options={publicModels.map((item) => ({ label: item, value: item }))} />
                                         </Form.Item>
                                     </Col>
-	                                    <Col span={24}>
-	                                        <Form.Item name={["public", "modelChannel", "systemPrompt"]} label="系统提示词">
-	                                            <Input.TextArea rows={4} />
-	                                        </Form.Item>
-	                                    </Col>
-	                                    <Col span={24}>
-	                                        <Form.Item
-	                                            name={["public", "modelChannel", "promptInjection", "image"]}
-	                                            label="图片任务前置注入提示词"
-	                                            extra="仅注入到图片生成/编辑请求开头。用于身份、安全和用途说明，不应写成画面元素。"
-	                                        >
-	                                            <Input.TextArea rows={4} />
-	                                        </Form.Item>
-	                                    </Col>
-	                                    <Col xs={24} md={12}>
-	                                        <Form.Item name={["public", "modelChannel", "promptInjection", "text"]} label="文本任务前置注入提示词">
-	                                            <Input.TextArea rows={3} placeholder="暂留空" />
-	                                        </Form.Item>
-	                                    </Col>
-	                                    <Col xs={24} md={12}>
-	                                        <Form.Item name={["public", "modelChannel", "promptInjection", "video"]} label="视频任务前置注入提示词">
-	                                            <Input.TextArea rows={3} placeholder="暂留空" />
-	                                        </Form.Item>
-	                                    </Col>
-	                                    <Col span={24}>
-	                                        <Form.Item name={["public", "modelChannel", "allowCustomChannel"]} label="是否允许用户自定义渠道" extra="开启后，前端可提供走后端渠道和用户自定义 baseUrl 直连两种模式" valuePropName="checked">
-	                                            <Switch />
+                                    <Col span={24}>
+                                        <Form.Item name={["public", "modelChannel", "systemPrompt"]} label="系统提示词">
+                                            <Input.TextArea rows={4} />
+                                        </Form.Item>
+                                    </Col>
+                                    <Col span={24}>
+                                        <Form.Item name={["public", "modelChannel", "promptInjection", "image"]} label="图片任务前置注入提示词" extra="仅注入到图片生成/编辑请求开头。用于身份、安全和用途说明，不应写成画面元素。">
+                                            <Input.TextArea rows={4} />
+                                        </Form.Item>
+                                    </Col>
+                                    <Col xs={24} md={12}>
+                                        <Form.Item name={["public", "modelChannel", "promptInjection", "text"]} label="文本任务前置注入提示词">
+                                            <Input.TextArea rows={3} placeholder="暂留空" />
+                                        </Form.Item>
+                                    </Col>
+                                    <Col xs={24} md={12}>
+                                        <Form.Item name={["public", "modelChannel", "promptInjection", "video"]} label="视频任务前置注入提示词">
+                                            <Input.TextArea rows={3} placeholder="暂留空" />
+                                        </Form.Item>
+                                    </Col>
+                                    <Col span={24}>
+                                        <Form.Item name={["public", "modelChannel", "allowCustomChannel"]} label="是否允许用户自定义渠道" extra="开启后，前端可提供走后端渠道和用户自定义 baseUrl 直连两种模式" valuePropName="checked">
+                                            <Switch />
                                         </Form.Item>
                                     </Col>
                                     <Col span={24}>
@@ -487,15 +483,12 @@ export default function AdminSettingsPage() {
                                                     dataIndex: "credits",
                                                     width: 220,
                                                     render: (_, item) => (
-                                                        <InputNumber
-                                                            min={0}
-                                                            step={1}
-                                                            precision={0}
-                                                            className="!w-full"
-                                                            value={item.credits}
-                                                            addonAfter="点"
-                                                            onChange={(value) => setModelCost(form, setModelCosts, item.model, Number(value) || 0)}
-                                                        />
+                                                        <Space.Compact className="w-full">
+                                                            <InputNumber min={0} step={1} precision={0} className="!w-full" value={item.credits} onChange={(value) => setModelCost(form, setModelCosts, item.model, Number(value) || 0)} />
+                                                            <span className="inline-flex h-8 shrink-0 items-center rounded-r-md border border-l-0 border-stone-300 bg-stone-50 px-3 text-sm text-stone-600 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300">
+                                                                点
+                                                            </span>
+                                                        </Space.Compact>
                                                     ),
                                                 },
                                             ]}
@@ -933,11 +926,7 @@ function collectChannelModels(channels: AdminModelChannel[]) {
 }
 
 function collectKnownModels(settings: AdminSettings) {
-    return uniqueModels([
-        ...(settings.public.modelChannel.availableModels || []),
-        ...(settings.public.modelChannel.modelCosts || []).map((item) => item.model),
-        ...settings.private.channels.flatMap((channel) => channel.models || []),
-    ]);
+    return uniqueModels([...(settings.public.modelChannel.availableModels || []), ...(settings.public.modelChannel.modelCosts || []).map((item) => item.model), ...settings.private.channels.flatMap((channel) => channel.models || [])]);
 }
 
 function buildModelSelectGroups(sourceModels: string[], existingModels: string[]): Record<ModelSelectTabKey, string[]> {

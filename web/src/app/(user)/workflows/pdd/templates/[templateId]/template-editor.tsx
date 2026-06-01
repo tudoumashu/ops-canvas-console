@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ComponentType, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import type { ComponentProps, ComponentType, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { App, Button, Card, Input, InputNumber, Modal, Select, Space, Switch, Tag, Typography, Upload } from "antd";
@@ -45,7 +45,17 @@ import { canvasThemes, type CanvasBackgroundMode, type CanvasTheme } from "@/lib
 import { defaultConfig, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { fetchAdminAssets } from "@/services/api/admin";
-import { fetchPDDWorkflowTemplate, fetchPDDWorkflowThemes, savePDDWorkflowTemplate, startPDDWorkflowTemplateRun, type WorkflowNodeRetry, type WorkflowTemplate, type WorkflowTemplateEdge, type WorkflowTemplateNode, type WorkflowTemplateSpec } from "@/services/api/pdd";
+import {
+    fetchPDDWorkflowTemplate,
+    fetchPDDWorkflowThemes,
+    savePDDWorkflowTemplate,
+    startPDDWorkflowTemplateRun,
+    type WorkflowNodeRetry,
+    type WorkflowTemplate,
+    type WorkflowTemplateEdge,
+    type WorkflowTemplateNode,
+    type WorkflowTemplateSpec,
+} from "@/services/api/pdd";
 import { fetchLocalPDDWorkflowTemplate, isLocalWorkflowTemplateId, saveLocalPDDWorkflowTemplate, startLocalPDDWorkflowTemplateRun } from "@/services/local-workflow-templates";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useLocalWorkspaceStore } from "@/stores/use-local-workspace-store";
@@ -983,7 +993,7 @@ export default function PDDWorkflowTemplateEditor({ templateId }: { templateId: 
                 <Card className="w-full max-w-md">
                     <Typography.Title level={3}>{query.isError ? "模板加载失败" : "加载中..."}</Typography.Title>
                     {query.isError ? (
-                        <Space direction="vertical">
+                        <Space orientation="vertical">
                             <Typography.Paragraph type="secondary">{errorText || "请刷新后重试"}</Typography.Paragraph>
                             <Space>
                                 <Button onClick={() => void query.refetch()}>重试</Button>
@@ -1150,7 +1160,7 @@ export default function PDDWorkflowTemplateEditor({ templateId }: { templateId: 
             ) : selectedNodeIds.size > 1 ? (
                 <aside className="w-[320px] shrink-0 overflow-y-auto border-l p-4" style={{ background: theme.node.panel, borderColor: theme.toolbar.border }}>
                     <Card size="small" title="已选择多个节点">
-                        <Space direction="vertical" className="w-full">
+                        <Space orientation="vertical" className="w-full">
                             <div className="text-sm opacity-70">共选择 {selectedNodeIds.size} 个节点。</div>
                             <Button block icon={<Trash2 className="size-4" />} danger onClick={() => deleteNodes(new Set(selectedNodeIds))}>
                                 删除选中节点
@@ -1284,7 +1294,14 @@ function TemplateConnectionCreateMenu({ pending, onCreate, onClose }: { pending:
 
 function ConnectionCreateOption({ theme, icon, title, description, onClick }: { theme: CanvasTheme; icon: ReactNode; title: string; description?: string; onClick?: () => void }) {
     return (
-        <button type="button" className="flex h-16 w-full cursor-pointer items-center gap-3 rounded-2xl px-3 text-left transition" style={{ color: theme.node.text }} onClick={onClick} onMouseEnter={(event) => (event.currentTarget.style.background = theme.node.fill)} onMouseLeave={(event) => (event.currentTarget.style.background = "transparent")}>
+        <button
+            type="button"
+            className="flex h-16 w-full cursor-pointer items-center gap-3 rounded-2xl px-3 text-left transition"
+            style={{ color: theme.node.text }}
+            onClick={onClick}
+            onMouseEnter={(event) => (event.currentTarget.style.background = theme.node.fill)}
+            onMouseLeave={(event) => (event.currentTarget.style.background = "transparent")}
+        >
             <span className="grid size-11 shrink-0 place-items-center rounded-xl" style={{ background: theme.node.fill, color: theme.node.muted }}>
                 {icon}
             </span>
@@ -1666,33 +1683,33 @@ function EdgeEditor({ edge, nodes, onChange, onDelete }: { edge: WorkflowTemplat
     const loopEnabled = Boolean(edge.loop?.enabled);
     return (
         <Card size="small" title="连线配置" extra={<Button danger size="small" icon={<Trash2 className="size-3.5" />} onClick={onDelete} />}>
-            <Space direction="vertical" className="w-full" size="middle">
-	                <div className="rounded-lg border border-white/10 p-2 text-xs opacity-75">
-	                    {from?.title || edge.from} → {to?.title || edge.to}
-	                </div>
-	                <Input value={edge.fromHandle || ""} addonBefore="出口名" placeholder="pass / repair / regenerate" onChange={(event) => onChange({ fromHandle: event.target.value || undefined })} />
-	                <Card size="small" title="输入引用">
-	                    <Space direction="vertical" className="w-full">
-	                        <InputNumber className="!w-full" min={1} max={99} value={edge.inputOrder || undefined} addonBefore="输入顺序" placeholder="按连线顺序" onChange={(value) => onChange({ inputOrder: Number(value || 0) || undefined })} />
-	                        <Input value={edge.inputAlias || ""} addonBefore="输入别名" placeholder="standard_reference / source_artwork / mockup_base" onChange={(event) => onChange({ inputAlias: event.target.value.trim() || undefined })} />
-	                        <Select
-	                            className="w-full"
-	                            value={edge.fileSelector || "all"}
-	                            options={[
-	                                { label: "全部文件", value: "all" },
-	                                { label: "第一张/第一个文件", value: "first" },
-	                                { label: "最后一张/最后一个文件", value: "last" },
-	                                { label: "第 1 张", value: "index:1" },
-	                                { label: "第 2 张", value: "index:2" },
-	                                { label: "第 3 张", value: "index:3" },
-	                            ]}
-	                            onChange={(fileSelector) => onChange({ fileSelector: fileSelector === "all" ? undefined : fileSelector })}
-	                        />
-	                    </Space>
-	                </Card>
-	                <Card size="small" title="条件 JSONPath">
-                    <Space direction="vertical" className="w-full">
-                        <Input value={edgeConditionString(edge, "jsonPath")} addonBefore="JSONPath" placeholder="$.decision" onChange={(event) => onChange({ condition: { ...condition, jsonPath: event.target.value } })} />
+            <Space orientation="vertical" className="w-full" size="middle">
+                <div className="rounded-lg border border-white/10 p-2 text-xs opacity-75">
+                    {from?.title || edge.from} → {to?.title || edge.to}
+                </div>
+                <CompactInput label="出口名" value={edge.fromHandle || ""} placeholder="pass / repair / regenerate" onChange={(event) => onChange({ fromHandle: event.target.value || undefined })} />
+                <Card size="small" title="输入引用">
+                    <Space orientation="vertical" className="w-full">
+                        <CompactInputNumber label="输入顺序" className="!w-full" min={1} max={99} value={edge.inputOrder || undefined} placeholder="按连线顺序" onChange={(value) => onChange({ inputOrder: Number(value || 0) || undefined })} />
+                        <CompactInput label="输入别名" value={edge.inputAlias || ""} placeholder="standard_reference / source_artwork / mockup_base" onChange={(event) => onChange({ inputAlias: event.target.value.trim() || undefined })} />
+                        <Select
+                            className="w-full"
+                            value={edge.fileSelector || "all"}
+                            options={[
+                                { label: "全部文件", value: "all" },
+                                { label: "第一张/第一个文件", value: "first" },
+                                { label: "最后一张/最后一个文件", value: "last" },
+                                { label: "第 1 张", value: "index:1" },
+                                { label: "第 2 张", value: "index:2" },
+                                { label: "第 3 张", value: "index:3" },
+                            ]}
+                            onChange={(fileSelector) => onChange({ fileSelector: fileSelector === "all" ? undefined : fileSelector })}
+                        />
+                    </Space>
+                </Card>
+                <Card size="small" title="条件 JSONPath">
+                    <Space orientation="vertical" className="w-full">
+                        <CompactInput label="JSONPath" value={edgeConditionString(edge, "jsonPath")} placeholder="$.decision" onChange={(event) => onChange({ condition: { ...condition, jsonPath: event.target.value } })} />
                         <Select
                             className="w-full"
                             value={edgeConditionString(edge, "operator") || "eq"}
@@ -1706,11 +1723,11 @@ function EdgeEditor({ edge, nodes, onChange, onDelete }: { edge: WorkflowTemplat
                             ]}
                             onChange={(operator) => onChange({ condition: { ...condition, operator } })}
                         />
-                        <Input value={edgeConditionString(edge, "value")} addonBefore="值" placeholder="pass" onChange={(event) => onChange({ condition: { ...condition, value: event.target.value } })} />
+                        <CompactInput label="值" value={edgeConditionString(edge, "value")} placeholder="pass" onChange={(event) => onChange({ condition: { ...condition, value: event.target.value } })} />
                     </Space>
                 </Card>
                 <Card size="small" title="受控循环">
-                    <Space direction="vertical" className="w-full">
+                    <Space orientation="vertical" className="w-full">
                         <Select
                             className="w-full"
                             value={loopEnabled ? "on" : "off"}
@@ -1721,11 +1738,11 @@ function EdgeEditor({ edge, nodes, onChange, onDelete }: { edge: WorkflowTemplat
                             onChange={(value) => onChange({ loop: value === "on" ? { ...(edge.loop || {}), enabled: true } : undefined })}
                         />
                         {loopEnabled ? (
-                            <InputNumber
+                            <CompactInputNumber
                                 className="!w-full"
                                 min={1}
                                 max={100}
-                                addonBefore="最大轮次"
+                                label="最大轮次"
                                 value={edgeLoopNumber(edge, "maxIterations", 5)}
                                 onChange={(value) => onChange({ loop: { ...(edge.loop || {}), enabled: true, maxIterations: Number(value || 5) } })}
                             />
@@ -1838,14 +1855,14 @@ function NodeEditor({
     };
     return (
         <Card size="small" title="节点配置" extra={<Button danger size="small" icon={<Trash2 className="size-3.5" />} onClick={onDelete} />}>
-            <Space direction="vertical" className="w-full" size="middle">
-                <Input value={node.title} onChange={(event) => onChange({ title: event.target.value })} addonBefore="标题" />
+            <Space orientation="vertical" className="w-full" size="middle">
+                <CompactInput label="标题" value={node.title} onChange={(event) => onChange({ title: event.target.value })} />
                 <LabeledControl label="节点功能">
                     <Select className="w-full" value={node.operation} options={operationOptionsByCategory[nodeCategory]} onChange={(value) => changeOperation(value as WorkflowTemplateNode["operation"])} />
                 </LabeledControl>
                 {isMaterialLookup ? (
                     <LabeledControl label="素材来源">
-                        <Space direction="vertical" className="w-full">
+                        <Space orientation="vertical" className="w-full">
                             <Select
                                 className="w-full"
                                 value={fixedMaterialMode ? "fixed" : "auto"}
@@ -1880,12 +1897,10 @@ function NodeEditor({
                         />
                     </LabeledControl>
                 ) : null}
-                {isCondition ? (
-                    <Input value={nodeExtraString(node, "defaultOutput")} addonBefore="默认出口" placeholder="default" onChange={(event) => onChange({ extra: { ...(node.extra || {}), defaultOutput: event.target.value } })} />
-                ) : null}
+                {isCondition ? <CompactInput label="默认出口" value={nodeExtraString(node, "defaultOutput")} placeholder="default" onChange={(event) => onChange({ extra: { ...(node.extra || {}), defaultOutput: event.target.value } })} /> : null}
                 {isScript ? (
                     <LabeledControl label="脚本设置">
-                        <Space direction="vertical" className="w-full">
+                        <Space orientation="vertical" className="w-full">
                             <Select
                                 className="w-full"
                                 value={nodeExtraString(node, "executor") || "vps"}
@@ -1895,13 +1910,13 @@ function NodeEditor({
                                 ]}
                                 onChange={(executor) => onChange({ extra: { ...(node.extra || {}), executor } })}
                             />
-                            <Input value={nodeExtraString(node, "scriptPath")} addonBefore="脚本路径" placeholder="scripts/upload_products.sh" onChange={(event) => onChange({ extra: { ...(node.extra || {}), scriptPath: event.target.value } })} />
-                            <InputNumber
+                            <CompactInput label="脚本路径" value={nodeExtraString(node, "scriptPath")} placeholder="scripts/upload_products.sh" onChange={(event) => onChange({ extra: { ...(node.extra || {}), scriptPath: event.target.value } })} />
+                            <CompactInputNumber
                                 className="!w-full"
                                 min={1}
                                 max={86400}
                                 value={nodeExtraNumber(node, "timeoutSeconds", 600)}
-                                addonBefore="超时秒数"
+                                label="超时秒数"
                                 onChange={(value) => onChange({ extra: { ...(node.extra || {}), timeoutSeconds: Number(value || 600) } })}
                             />
                             <Input.TextArea
@@ -1982,7 +1997,7 @@ function NodeEditor({
                 ) : null}
                 {showUpstreamEditor ? (
                     <Card size="small" title="上游输入">
-                        <Space direction="vertical" className="w-full">
+                        <Space orientation="vertical" className="w-full">
                             <Select
                                 className="w-full"
                                 placeholder="添加上游节点"
@@ -1990,39 +2005,49 @@ function NodeEditor({
                                 options={nodes.filter((item) => item.id !== node.id && !upstreamEdges.some((edge) => edge.from === item.id)).map((item) => ({ label: `${item.title} (${item.id})`, value: item.id }))}
                                 onChange={onAddEdge}
                             />
-	                            {upstreamEdges.length ? (
-	                                upstreamEdges.map((edge) => {
-	                                    const from = nodes.find((item) => item.id === edge.from);
-	                                    return (
-	                                        <div key={edge.id} className="space-y-2 rounded-lg border border-white/10 p-2 text-xs">
-	                                            <div className="flex items-center justify-between gap-2">
-	                                                <span className="inline-flex min-w-0 items-center gap-1">
-	                                                    <Link2 className="size-3 shrink-0" />
-	                                                    <span className="truncate">{from?.title || edge.from} → {node.title}</span>
-	                                                </span>
-	                                                <Button size="small" type="text" danger icon={<Trash2 className="size-3" />} onClick={() => onDeleteEdge(edge.id)} />
-	                                            </div>
-	                                            <div className="grid grid-cols-[88px_1fr] gap-2">
-	                                                <InputNumber className="!w-full" min={1} max={99} size="small" value={edge.inputOrder || undefined} placeholder="顺序" onChange={(value) => onUpdateEdge(edge.id, { inputOrder: Number(value || 0) || undefined })} />
-	                                                <Input size="small" value={edge.inputAlias || ""} placeholder="别名：standard_reference" onChange={(event) => onUpdateEdge(edge.id, { inputAlias: event.target.value.trim() || undefined })} />
-	                                            </div>
-	                                            <Select
-	                                                size="small"
-	                                                className="w-full"
-	                                                value={edge.fileSelector || "all"}
-	                                                options={[
-	                                                    { label: "全部文件", value: "all" },
-	                                                    { label: "第一张/第一个文件", value: "first" },
-	                                                    { label: "最后一张/最后一个文件", value: "last" },
-	                                                    { label: "第 1 张", value: "index:1" },
-	                                                    { label: "第 2 张", value: "index:2" },
-	                                                    { label: "第 3 张", value: "index:3" },
-	                                                ]}
-	                                                onChange={(fileSelector) => onUpdateEdge(edge.id, { fileSelector: fileSelector === "all" ? undefined : fileSelector })}
-	                                            />
-	                                        </div>
-	                                    );
-	                                })
+                            {upstreamEdges.length ? (
+                                upstreamEdges.map((edge) => {
+                                    const from = nodes.find((item) => item.id === edge.from);
+                                    return (
+                                        <div key={edge.id} className="space-y-2 rounded-lg border border-white/10 p-2 text-xs">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <span className="inline-flex min-w-0 items-center gap-1">
+                                                    <Link2 className="size-3 shrink-0" />
+                                                    <span className="truncate">
+                                                        {from?.title || edge.from} → {node.title}
+                                                    </span>
+                                                </span>
+                                                <Button size="small" type="text" danger icon={<Trash2 className="size-3" />} onClick={() => onDeleteEdge(edge.id)} />
+                                            </div>
+                                            <div className="grid grid-cols-[88px_1fr] gap-2">
+                                                <InputNumber
+                                                    className="!w-full"
+                                                    min={1}
+                                                    max={99}
+                                                    size="small"
+                                                    value={edge.inputOrder || undefined}
+                                                    placeholder="顺序"
+                                                    onChange={(value) => onUpdateEdge(edge.id, { inputOrder: Number(value || 0) || undefined })}
+                                                />
+                                                <Input size="small" value={edge.inputAlias || ""} placeholder="别名：standard_reference" onChange={(event) => onUpdateEdge(edge.id, { inputAlias: event.target.value.trim() || undefined })} />
+                                            </div>
+                                            <Select
+                                                size="small"
+                                                className="w-full"
+                                                value={edge.fileSelector || "all"}
+                                                options={[
+                                                    { label: "全部文件", value: "all" },
+                                                    { label: "第一张/第一个文件", value: "first" },
+                                                    { label: "最后一张/最后一个文件", value: "last" },
+                                                    { label: "第 1 张", value: "index:1" },
+                                                    { label: "第 2 张", value: "index:2" },
+                                                    { label: "第 3 张", value: "index:3" },
+                                                ]}
+                                                onChange={(fileSelector) => onUpdateEdge(edge.id, { fileSelector: fileSelector === "all" ? undefined : fileSelector })}
+                                            />
+                                        </div>
+                                    );
+                                })
                             ) : (
                                 <div className="text-xs text-stone-500">暂无上游输入</div>
                             )}
@@ -2063,19 +2088,37 @@ function LabeledControl({ label, children }: { label: ReactNode; children: React
     );
 }
 
+function CompactInput({ label, ...props }: ComponentProps<typeof Input> & { label: ReactNode }) {
+    return (
+        <Space.Compact className="w-full">
+            <span className="inline-flex h-8 shrink-0 items-center rounded-l-md border border-r-0 border-stone-300 bg-stone-50 px-3 text-sm text-stone-600 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300">{label}</span>
+            <Input {...props} />
+        </Space.Compact>
+    );
+}
+
+function CompactInputNumber({ label, ...props }: ComponentProps<typeof InputNumber> & { label: ReactNode }) {
+    return (
+        <Space.Compact className="w-full">
+            <span className="inline-flex h-8 shrink-0 items-center rounded-l-md border border-r-0 border-stone-300 bg-stone-50 px-3 text-sm text-stone-600 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300">{label}</span>
+            <InputNumber {...props} className={props.className || "!w-full"} />
+        </Space.Compact>
+    );
+}
+
 function RetryConfigEditor({ retry, onChange }: { retry?: WorkflowNodeRetry; onChange: (patch: Partial<WorkflowNodeRetry>) => void }) {
     const value = normalizeWorkflowNodeRetry(retry);
     const disabled = value.enabled === false;
     return (
         <Card size="small" title="失败重试">
-            <Space direction="vertical" className="w-full">
+            <Space orientation="vertical" className="w-full">
                 <div className="flex items-center justify-between gap-3">
                     <Typography.Text className="text-sm">启用失败重试</Typography.Text>
                     <Switch checked={!disabled} onChange={(enabled) => onChange({ enabled })} />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                    <InputNumber className="!w-full" min={0} max={9999} disabled={disabled} value={value.retryCount} addonBefore="重试次数" onChange={(retryCount) => onChange({ retryCount: Number(retryCount ?? 0) })} />
-                    <InputNumber className="!w-full" min={0} max={86400} disabled={disabled} value={value.intervalSeconds} addonBefore="间隔秒" onChange={(intervalSeconds) => onChange({ intervalSeconds: Number(intervalSeconds ?? 0) })} />
+                    <CompactInputNumber label="重试次数" className="!w-full" min={0} max={9999} disabled={disabled} value={value.retryCount} onChange={(retryCount) => onChange({ retryCount: Number(retryCount ?? 0) })} />
+                    <CompactInputNumber label="间隔秒" className="!w-full" min={0} max={86400} disabled={disabled} value={value.intervalSeconds} onChange={(intervalSeconds) => onChange({ intervalSeconds: Number(intervalSeconds ?? 0) })} />
                 </div>
                 <Typography.Text type="secondary" className="text-xs">
                     次数 0 表示一直重试，间隔 0 使用系统退避。
@@ -2107,7 +2150,7 @@ function ImageGuardrailEditor({
     const repairConfig = { ...config, model: stringValue(repair.model, config.imageModel || config.model || defaultConfig.imageModel) };
     return (
         <Card size="small" title="内置质检 / 修复">
-            <Space direction="vertical" className="w-full">
+            <Space orientation="vertical" className="w-full">
                 <div className="flex items-center justify-between gap-3">
                     <Typography.Text className="text-sm">启用图片质检与自动修复</Typography.Text>
                     <Switch checked={enabled} onChange={(checked) => onChange({ enabled: checked })} />
@@ -2136,9 +2179,9 @@ function ImageGuardrailEditor({
                             onChange={(failureStrategy) => onChange({ failureStrategy })}
                         />
                         <div className="grid grid-cols-3 gap-2">
-                            <InputNumber className="!w-full" min={0} max={20} value={numberValue(repair.maxRounds, 5)} addonBefore="修复轮次" onChange={(value) => onSectionChange("repair", { maxRounds: Number(value ?? 5), enabled: true })} />
-                            <InputNumber className="!w-full" min={0} max={9999} value={transientRetryConfig.retryCount} addonBefore="瞬时重试" onChange={(value) => onSectionChange("transientRetry", { retryCount: Number(value ?? 0) })} />
-                            <InputNumber className="!w-full" min={0} max={86400} value={transientRetryConfig.intervalSeconds} addonBefore="间隔秒" onChange={(value) => onSectionChange("transientRetry", { intervalSeconds: Number(value ?? 0) })} />
+                            <CompactInputNumber label="修复轮次" className="!w-full" min={0} max={20} value={numberValue(repair.maxRounds, 5)} onChange={(value) => onSectionChange("repair", { maxRounds: Number(value ?? 5), enabled: true })} />
+                            <CompactInputNumber label="瞬时重试" className="!w-full" min={0} max={9999} value={transientRetryConfig.retryCount} onChange={(value) => onSectionChange("transientRetry", { retryCount: Number(value ?? 0) })} />
+                            <CompactInputNumber label="间隔秒" className="!w-full" min={0} max={86400} value={transientRetryConfig.intervalSeconds} onChange={(value) => onSectionChange("transientRetry", { intervalSeconds: Number(value ?? 0) })} />
                         </div>
                         <Typography.Text type="secondary" className="text-xs">
                             瞬时重试 0 表示一直重试，间隔 0 使用系统退避。
@@ -2149,7 +2192,7 @@ function ImageGuardrailEditor({
                         <LabeledControl label="修复模型">
                             <ModelPicker config={repairConfig} value={repairConfig.model} modality="image" onChange={(model) => onSectionChange("repair", { model, enabled: true })} onMissingConfig={() => openConfigDialog(true)} fullWidth />
                         </LabeledControl>
-                        <InputNumber className="!w-full" min={1} max={20} value={numberValue(regenerate.maxRounds, 1)} addonBefore="重生轮次" onChange={(value) => onSectionChange("regenerate", { maxRounds: Number(value ?? 1) })} />
+                        <CompactInputNumber label="重生轮次" className="!w-full" min={1} max={20} value={numberValue(regenerate.maxRounds, 1)} onChange={(value) => onSectionChange("regenerate", { maxRounds: Number(value ?? 1) })} />
                     </>
                 ) : null}
             </Space>
@@ -2170,18 +2213,18 @@ function VariableInsertSelect({ onInsert }: { onInsert: (value: string) => void 
                 { label: "商品标题", value: "{{productTitle}}" },
                 { label: "商品标题原文", value: "{{productTitleRaw}}" },
                 { label: "商品序号", value: "{{input.index}}" },
-	                { label: "当前输出序号", value: "{{index}}" },
-	                { label: "当前输出序号 1", value: "{{index1}}" },
-	                { label: "当前输出序号 0001", value: "{{index4}}" },
-	                { label: "节点输出数量", value: "{{count}}" },
-	                { label: "上传参考图顺序说明", value: "{{uploaded_image_order}}" },
-	                { label: "上游引用 JSON", value: "{{refs_json}}" },
-	                { label: "别名引用第一张图", value: "{{ref.<alias>.first_file}}" },
-	                { label: "别名引用第 2 张图", value: "{{ref.<alias>.image_2}}" },
-	                { label: "别名引用文件列表 JSON", value: "{{ref.<alias>.files_json}}" },
-	                { label: "别名引用文本", value: "{{ref.<alias>.text}}" },
-	                { label: "上游节点文本", value: "{{node.<id>.text}}" },
-	                { label: "上游节点第一张图片", value: "{{node.<id>.first_file}}" },
+                { label: "当前输出序号", value: "{{index}}" },
+                { label: "当前输出序号 1", value: "{{index1}}" },
+                { label: "当前输出序号 0001", value: "{{index4}}" },
+                { label: "节点输出数量", value: "{{count}}" },
+                { label: "上传参考图顺序说明", value: "{{uploaded_image_order}}" },
+                { label: "上游引用 JSON", value: "{{refs_json}}" },
+                { label: "别名引用第一张图", value: "{{ref.<alias>.first_file}}" },
+                { label: "别名引用第 2 张图", value: "{{ref.<alias>.image_2}}" },
+                { label: "别名引用文件列表 JSON", value: "{{ref.<alias>.files_json}}" },
+                { label: "别名引用文本", value: "{{ref.<alias>.text}}" },
+                { label: "上游节点文本", value: "{{node.<id>.text}}" },
+                { label: "上游节点第一张图片", value: "{{node.<id>.first_file}}" },
                 { label: "上游节点图片列表 JSON", value: "{{node.<id>.files_json}}" },
             ]}
             onChange={(value) => onInsert(String(value || ""))}
@@ -2216,11 +2259,11 @@ function TemplateSettingsModal({
             }
             width={620}
         >
-            <Space direction="vertical" className="w-full" size="middle">
+            <Space orientation="vertical" className="w-full" size="middle">
                 <Input.TextArea value={template.description} onChange={(event) => onTemplateChange({ description: event.target.value })} rows={3} placeholder="模板说明" />
                 <div className="grid grid-cols-2 gap-2">
-                    <InputNumber className="!w-full" min={1} max={20} value={spec.settings.productConcurrency} addonBefore="商品并发" onChange={(value) => onSpecChange({ settings: { ...spec.settings, productConcurrency: Number(value || 1) } })} />
-                    <InputNumber className="!w-full" min={1} max={100} value={spec.settings.maxRetries} addonBefore="重试" onChange={(value) => onSpecChange({ settings: { ...spec.settings, maxRetries: Number(value || 1) } })} />
+                    <CompactInputNumber label="商品并发" className="!w-full" min={1} max={20} value={spec.settings.productConcurrency} onChange={(value) => onSpecChange({ settings: { ...spec.settings, productConcurrency: Number(value || 1) } })} />
+                    <CompactInputNumber label="重试" className="!w-full" min={1} max={100} value={spec.settings.maxRetries} onChange={(value) => onSpecChange({ settings: { ...spec.settings, maxRetries: Number(value || 1) } })} />
                 </div>
             </Space>
         </Modal>
@@ -2286,7 +2329,7 @@ function StartTemplateRunModal({
                 </Space>
             }
         >
-            <Space direction="vertical" className="w-full">
+            <Space orientation="vertical" className="w-full">
                 <div className="text-sm text-stone-500">
                     每一行是一个商品输入；也可以导入 JSON 数组。对象字段可在 prompt 和输出路径中用 {"{{input.theme}}"}、{"{{input.character}}"} 读取。
                 </div>
@@ -2383,8 +2426,10 @@ function normalizeSpec(spec?: WorkflowTemplateSpec): WorkflowTemplateSpec {
             const rawOperation = String((node as WorkflowTemplateNode & { operation?: string }).operation || defaultOperation(node.type));
             const operation = rawOperation === "json_generation" ? "text_generation" : rawOperation;
             const typedOperation = operation as WorkflowTemplateNode["operation"];
+            const type = normalizeWorkflowNodeType(node, typedOperation);
             return {
                 ...node,
+                type,
                 operation: typedOperation,
                 extra: rawOperation === "json_generation" ? { ...(node.extra || {}), outputFormat: "json" } : node.extra,
                 retry: workflowOperationUsesModel(typedOperation) ? normalizeWorkflowNodeRetry(node.retry) : undefined,
@@ -2397,6 +2442,18 @@ function normalizeSpec(spec?: WorkflowTemplateSpec): WorkflowTemplateSpec {
         }),
         edges: spec?.edges || [],
     };
+}
+
+function normalizeWorkflowNodeType(node: WorkflowTemplateNode, operation: WorkflowTemplateNode["operation"]): WorkflowTemplateNode["type"] {
+    if (operation === "material_lookup") return "material";
+    if (operation === "image_select" || operation === "image_generation" || operation === "image_edit") return "image";
+    if (operation === "video_generation") return "video";
+    if (operation === "input" || operation === "condition" || operation === "script" || operation === "text_static" || operation === "text_generation") return "text";
+    return isWorkflowNodeType(node.type) ? node.type : "text";
+}
+
+function isWorkflowNodeType(value: unknown): value is WorkflowTemplateNode["type"] {
+    return value === "material" || value === "text" || value === "image" || value === "video";
 }
 
 function cloneSpec(spec: WorkflowTemplateSpec): WorkflowTemplateSpec {

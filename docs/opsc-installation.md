@@ -21,6 +21,20 @@ docker run --rm -v "$PWD":/src -w /src golang:1.25-alpine \
 
 ## 手动启动
 
+本地日常使用 Web UI 时建议先用生产模式启动前端，避免 `next dev` 在页面切换时按需编译：
+
+```bash
+cd web
+API_BASE_URL=http://127.0.0.1:8080 npm run local:prod
+```
+
+开发热更新仍可使用：
+
+```bash
+cd web
+API_BASE_URL=http://127.0.0.1:8080 npm run local:dev
+```
+
 ```bash
 opsc workspace init --workspace ~/OpsCanvas
 opsc serve --workspace ~/OpsCanvas --origin http://localhost:3000

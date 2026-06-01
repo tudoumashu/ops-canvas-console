@@ -253,7 +253,7 @@ func TestServeLocalTemplateRunDraftArtifactRefHappyPath(t *testing.T) {
 		t.Fatalf("asset file status=%d body=%q", status, body)
 	}
 
-	templateBody := `{"data":{"title":"Fixed Material Template","workflowType":"pdd","version":1,"nodes":[{"id":"material_1","type":"material_lookup","extra":{"assetMode":"fixed","assetId":` + strconvQuote(assetID) + `}},{"id":"image_1","type":"image_generation"}],"edges":[{"source":"material_1","target":"image_1"}],"settings":{"maxRetries":0}}}`
+	templateBody := `{"data":{"title":"Fixed Material Template","workflowType":"pdd","version":1,"nodes":[{"id":"material_1","type":"material_lookup","title":"素材节点","extra":{"assetMode":"fixed","assetId":` + strconvQuote(assetID) + `}},{"id":"script_1","type":"script","title":"本地脚本"},{"id":"image_1","type":"image_generation","title":"生成图片"}],"edges":[{"source":"material_1","target":"script_1"},{"source":"script_1","target":"image_1"}],"settings":{"maxRetries":0}}}`
 	status, body = serveRequest(t, http.MethodPost, runtime.BaseURL+"/api/local/templates", token, "", strings.NewReader(templateBody), nil)
 	if status != http.StatusOK || !strings.Contains(body, `"title":"Fixed Material Template"`) {
 		t.Fatalf("template create status=%d body=%s", status, body)
@@ -273,16 +273,37 @@ func TestServeLocalTemplateRunDraftArtifactRefHappyPath(t *testing.T) {
 		t.Fatalf("artifact import status=%d body=%s", status, body)
 	}
 	artifactID := jsonPathString(t, body, "data.id")
+	generatedData := `{"type":"image","title":"Generated Image","privacy":"private","source":{"type":"test","assetId":` + strconvQuote(assetID) + `,"templateId":` + strconvQuote(templateID) + `,"runId":` + strconvQuote(runID) + `,"nodeId":"image_1"}}`
+	status, body = serveMultipartRequest(t, runtime.BaseURL+"/api/local/artifacts/import", token, generatedData, "original", "", "generated.png", "image/png", []byte("generated-image"))
+	if status != http.StatusOK || !strings.Contains(body, `"kind":"artifact"`) {
+		t.Fatalf("generated artifact import status=%d body=%s", status, body)
+	}
+	generatedArtifactID := jsonPathString(t, body, "data.id")
 
 	refBody := `{"data":{"artifactId":` + strconvQuote(artifactID) + `,"role":"input","nodeId":"material_1","slot":"material","order":0,"metadata":{"sourceAssetId":` + strconvQuote(assetID) + `}}}`
 	status, body = serveRequest(t, http.MethodPost, runtime.BaseURL+"/api/local/runs/"+runID+"/artifacts", token, "", strings.NewReader(refBody), nil)
 	if status != http.StatusOK || !strings.Contains(body, `"kind":"run_artifact_ref"`) {
 		t.Fatalf("run artifact ref status=%d body=%s", status, body)
 	}
+	generatedRefBody := `{"data":{"artifactId":` + strconvQuote(generatedArtifactID) + `,"role":"output","nodeId":"image_1","slot":"image","order":0,"metadata":{"templateNodeId":"image_1"}}}`
+	status, body = serveRequest(t, http.MethodPost, runtime.BaseURL+"/api/local/runs/"+runID+"/artifacts", token, "", strings.NewReader(generatedRefBody), nil)
+	if status != http.StatusOK || !strings.Contains(body, `"kind":"run_artifact_ref"`) {
+		t.Fatalf("generated run artifact ref status=%d body=%s", status, body)
+	}
 	nodeBody := `{"data":{"nodeId":"material_1","status":"success","output":{"assetId":` + strconvQuote(assetID) + `,"artifactId":` + strconvQuote(artifactID) + `}}}`
 	status, body = serveRequest(t, http.MethodPost, runtime.BaseURL+"/api/local/runs/"+runID+"/nodes/material_1", token, "", strings.NewReader(nodeBody), nil)
 	if status != http.StatusOK || !strings.Contains(body, `"nodeId":"material_1"`) || !strings.Contains(body, `"status":"success"`) {
 		t.Fatalf("run node state status=%d body=%s", status, body)
+	}
+	scriptNodeBody := `{"data":{"nodeId":"script_1","status":"success","output":{"text":"script ok"}}}`
+	status, body = serveRequest(t, http.MethodPost, runtime.BaseURL+"/api/local/runs/"+runID+"/nodes/script_1", token, "", strings.NewReader(scriptNodeBody), nil)
+	if status != http.StatusOK || !strings.Contains(body, `"nodeId":"script_1"`) || !strings.Contains(body, `"status":"success"`) {
+		t.Fatalf("script run node state status=%d body=%s", status, body)
+	}
+	imageNodeBody := `{"data":{"nodeId":"image_1","status":"success","output":{"artifactId":` + strconvQuote(generatedArtifactID) + `}}}`
+	status, body = serveRequest(t, http.MethodPost, runtime.BaseURL+"/api/local/runs/"+runID+"/nodes/image_1", token, "", strings.NewReader(imageNodeBody), nil)
+	if status != http.StatusOK || !strings.Contains(body, `"nodeId":"image_1"`) || !strings.Contains(body, `"status":"success"`) {
+		t.Fatalf("image run node state status=%d body=%s", status, body)
 	}
 	eventBody := `{"event":{"type":"run.waiting_for_executor","level":"info","actor":{"type":"web","id":"ops-canvas-web"},"message":"Local run draft created","data":{"mode":"local"}}}`
 	status, body = serveRequest(t, http.MethodPost, runtime.BaseURL+"/api/local/runs/"+runID+"/events", token, "", strings.NewReader(eventBody), nil)
@@ -291,7 +312,7 @@ func TestServeLocalTemplateRunDraftArtifactRefHappyPath(t *testing.T) {
 	}
 
 	status, body = serveRequest(t, http.MethodGet, runtime.BaseURL+"/api/local/runs/"+runID+"/status", token, "", nil, nil)
-	if status != http.StatusOK || !strings.Contains(body, `"artifactCount":1`) || !strings.Contains(body, `"nodeId":"material_1"`) || !strings.Contains(body, `"status":"success"`) {
+	if status != http.StatusOK || !strings.Contains(body, `"artifactCount":2`) || !strings.Contains(body, `"nodeId":"material_1"`) || !strings.Contains(body, `"status":"success"`) {
 		t.Fatalf("run status status=%d body=%s", status, body)
 	}
 	assertNoServeLeak(t, body, root, token)
@@ -304,10 +325,88 @@ func TestServeLocalTemplateRunDraftArtifactRefHappyPath(t *testing.T) {
 		t.Fatalf("artifact file status=%d body=%q", status, body)
 	}
 
+	status, body = serveRequest(t, http.MethodGet, runtime.BaseURL+"/api/local/runs/"+runID+"/pdd-overview", token, "", nil, nil)
+	if status != http.StatusOK || !strings.Contains(body, `"runId":"`+runID+`"`) || !strings.Contains(body, `"productTotal":1`) || !strings.Contains(body, `"artifactCount":2`) {
+		t.Fatalf("local pdd overview status=%d body=%s", status, body)
+	}
+	assertNoServeLeak(t, body, root, token)
+	status, body = serveRequest(t, http.MethodGet, runtime.BaseURL+"/api/local/runs/"+runID+"/pdd-product-detail?key=product_001", token, "", nil, nil)
+	if status != http.StatusOK || !strings.Contains(body, `"product":{"key":"product_001"`) || !strings.Contains(body, artifactID) || !strings.Contains(body, `"url":"`+runtime.BaseURL) {
+		t.Fatalf("local pdd product detail status=%d body=%s", status, body)
+	}
+	var productDetailResponse struct {
+		Code int                   `json:"code"`
+		Data localPDDProductDetail `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(body), &productDetailResponse); err != nil {
+		t.Fatalf("unmarshal local pdd product detail: %v body=%s", err, body)
+	}
+	var imageSummary string
+	var imageArtifactCount int
+	for _, node := range productDetailResponse.Data.Nodes {
+		if node.ID == "image_1" {
+			imageSummary = node.Summary
+			imageArtifactCount = len(node.Artifacts)
+		}
+	}
+	if imageArtifactCount != 1 || !strings.Contains(imageSummary, "输出文件") {
+		t.Fatalf("image node summary=%q artifacts=%d, want VPS-style output summary and artifact", imageSummary, imageArtifactCount)
+	}
+	assertNoServeLeak(t, body, root, token)
+	status, body = serveRequest(t, http.MethodGet, runtime.BaseURL+"/api/local/runs/"+runID+"/creative-canvas?key=product_001", token, "", nil, nil)
+	if status != http.StatusOK || !strings.Contains(body, `"runId":"`+runID+`"`) || !strings.Contains(body, `"saved":false`) || !strings.Contains(body, artifactID) || !strings.Contains(body, generatedArtifactID) || !strings.Contains(body, `"id":"script_1"`) || !strings.Contains(body, `"type":"config"`) || !strings.Contains(body, `"fromNodeId":"material_1"`) || !strings.Contains(body, `"toNodeId":"script_1"`) || !strings.Contains(body, `"fromNodeId":"script_1"`) || !strings.Contains(body, `"toNodeId":"image_1"`) {
+		t.Fatalf("local pdd creative canvas status=%d body=%s", status, body)
+	}
+	canvasBody := `{"nodes":[{"id":"artifact-material_1-0","type":"image","title":"Canvas Image","position":{"x":10,"y":20},"width":640,"height":640,"metadata":{"artifactId":` + strconvQuote(artifactID) + `,"originWorkflowNodeId":"material_1"}},{"id":"artifact-image_1-0","type":"image","title":"Generated Image","position":{"x":20,"y":30},"width":640,"height":640,"metadata":{"artifactId":` + strconvQuote(generatedArtifactID) + `,"originWorkflowNodeId":"image_1"}}],"edges":[],"viewport":{"x":1,"y":2,"k":0.9},"backgroundMode":"lines","showImageInfo":true}`
+	status, body = serveRequest(t, http.MethodPost, runtime.BaseURL+"/api/local/runs/"+runID+"/creative-canvas?key=product_001", token, "", strings.NewReader(canvasBody), nil)
+	if status != http.StatusOK || !strings.Contains(body, `"saved":true`) || !strings.Contains(body, `"artifact-material_1-0"`) {
+		t.Fatalf("save local pdd creative canvas status=%d body=%s", status, body)
+	}
+	status, body = serveRequest(t, http.MethodGet, runtime.BaseURL+"/api/local/runs/"+runID+"/creative-canvas?key=product_001", token, "", nil, nil)
+	var savedCanvasResponse struct {
+		Code int                    `json:"code"`
+		Data localPDDCreativeCanvas `json:"data"`
+	}
+	if status != http.StatusOK || json.Unmarshal([]byte(body), &savedCanvasResponse) != nil || len(savedCanvasResponse.Data.Edges) == 0 || localPDDCreativeCanvasHasOverlap(savedCanvasResponse.Data.Nodes) {
+		t.Fatalf("saved local pdd creative canvas was not repaired status=%d body=%s", status, body)
+	}
+	if !localPDDTestCanvasHasNode(savedCanvasResponse.Data, "material_1") || !localPDDTestCanvasHasNode(savedCanvasResponse.Data, "script_1") || !localPDDTestCanvasHasEdge(savedCanvasResponse.Data, "material_1", "script_1") || !localPDDTestCanvasHasEdge(savedCanvasResponse.Data, "script_1", "image_1") {
+		t.Fatalf("saved local pdd creative canvas did not normalize to live graph: %#v", savedCanvasResponse.Data)
+	}
+	uploadBody := `{"nodeId":"manual_upload","fileName":"manual.png","mimeType":"image/png","content":"data:image/png;base64,` + executorTestPNGBase64 + `"}`
+	status, body = serveRequest(t, http.MethodPost, runtime.BaseURL+"/api/local/runs/"+runID+"/creative-canvas/assets?key=product_001", token, "", strings.NewReader(uploadBody), nil)
+	if status != http.StatusOK || !strings.Contains(body, `"path":"artifact:`) || !strings.Contains(body, `"mimeType":"image/png"`) || !strings.Contains(body, `"width":1`) {
+		t.Fatalf("upload local pdd creative canvas asset status=%d body=%s", status, body)
+	}
+	uploadedPath := jsonPathString(t, body, "data.path")
+	applyBody := `{"sourceNodeId":"material_1","targetNodeId":"manual_upload","artifactPath":` + strconvQuote(uploadedPath) + `}`
+	status, body = serveRequest(t, http.MethodPost, runtime.BaseURL+"/api/local/runs/"+runID+"/creative-canvas/apply?key=product_001", token, "", strings.NewReader(applyBody), nil)
+	if status != http.StatusOK || !strings.Contains(body, `"applied":true`) || !strings.Contains(body, `"rerunDownstream":false`) {
+		t.Fatalf("apply local pdd creative canvas output status=%d body=%s", status, body)
+	}
+
 	cancel()
 	if err := waitServeDone(t, errCh); err != nil {
 		t.Fatalf("Serve() error after cancel = %v", err)
 	}
+}
+
+func localPDDTestCanvasHasNode(canvas localPDDCreativeCanvas, nodeID string) bool {
+	for _, node := range canvas.Nodes {
+		if node.ID == nodeID {
+			return true
+		}
+	}
+	return false
+}
+
+func localPDDTestCanvasHasEdge(canvas localPDDCreativeCanvas, fromID string, toID string) bool {
+	for _, edge := range canvas.Edges {
+		if edge.FromNodeID == fromID && edge.ToNodeID == toID {
+			return true
+		}
+	}
+	return false
 }
 
 func TestServeLocalObjectWritesAndSanitization(t *testing.T) {

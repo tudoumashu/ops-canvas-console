@@ -49,6 +49,20 @@ docker compose -f docker-compose.local.yml up -d --build
 
 运行后默认端口3000，可访问 `http://localhost:3000`。
 
+如果直接用源码启动前端，日常本地使用建议跑生产本地模式，避免 `next dev` 按需编译导致页面切换卡顿：
+
+```bash
+cd web
+API_BASE_URL=http://127.0.0.1:8080 npm run local:prod
+```
+
+需要热更新开发时再使用：
+
+```bash
+cd web
+API_BASE_URL=http://127.0.0.1:8080 npm run local:dev
+```
+
 如需要拉取提示词，可前往:`http://localhost:3000/admin/prompts`
 
 ### 本地工作区

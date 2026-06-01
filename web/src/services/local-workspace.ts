@@ -1,5 +1,7 @@
 "use client";
 
+import type { PDDCreativeCanvas, PDDCreativeCanvasApplyRequest, PDDCreativeCanvasAsset, PDDCreativeCanvasAssetRequest, PDDCreativeCanvasSaveRequest, PDDManualEditResult, PDDProductDetail, PDDRunOverview } from "@/services/api/pdd";
+
 export const DEFAULT_LOCAL_WORKSPACE_BASE_URL = "http://127.0.0.1:17680";
 
 export type LocalWorkspaceInfo = {
@@ -546,6 +548,30 @@ export async function updateLocalRun(baseUrl: string, id: string, revision: numb
 
 export async function fetchLocalRunStatus(baseUrl: string, id: string) {
     return localWorkspaceRequest<LocalRunStatusSnapshot>(baseUrl, `/api/local/runs/${encodeURIComponent(id)}/status`);
+}
+
+export async function fetchLocalPDDRunOverview(baseUrl: string, runId: string) {
+    return localWorkspaceRequest<PDDRunOverview>(baseUrl, `/api/local/runs/${encodeURIComponent(runId)}/pdd-overview`);
+}
+
+export async function fetchLocalPDDProductDetail(baseUrl: string, runId: string, productKey: string) {
+    return localWorkspaceRequest<PDDProductDetail>(baseUrl, `/api/local/runs/${encodeURIComponent(runId)}/pdd-product-detail?key=${encodeURIComponent(productKey)}`);
+}
+
+export async function fetchLocalPDDCreativeCanvas(baseUrl: string, runId: string, productKey: string) {
+    return localWorkspaceRequest<PDDCreativeCanvas>(baseUrl, `/api/local/runs/${encodeURIComponent(runId)}/creative-canvas?key=${encodeURIComponent(productKey)}`);
+}
+
+export async function saveLocalPDDCreativeCanvas(baseUrl: string, runId: string, productKey: string, payload: PDDCreativeCanvasSaveRequest) {
+    return localWorkspaceRequest<PDDCreativeCanvas>(baseUrl, `/api/local/runs/${encodeURIComponent(runId)}/creative-canvas?key=${encodeURIComponent(productKey)}`, jsonRequest("POST", payload));
+}
+
+export async function uploadLocalPDDCreativeCanvasAsset(baseUrl: string, runId: string, productKey: string, payload: PDDCreativeCanvasAssetRequest) {
+    return localWorkspaceRequest<PDDCreativeCanvasAsset>(baseUrl, `/api/local/runs/${encodeURIComponent(runId)}/creative-canvas/assets?key=${encodeURIComponent(productKey)}`, jsonRequest("POST", payload));
+}
+
+export async function applyLocalPDDCreativeCanvasOutput(baseUrl: string, runId: string, productKey: string, payload: PDDCreativeCanvasApplyRequest) {
+    return localWorkspaceRequest<PDDManualEditResult>(baseUrl, `/api/local/runs/${encodeURIComponent(runId)}/creative-canvas/apply?key=${encodeURIComponent(productKey)}`, jsonRequest("POST", payload));
 }
 
 export async function fetchLocalRunEvents(baseUrl: string, id: string, after = 0) {

@@ -18,9 +18,7 @@ type WorkflowFolder = {
     kind: "pdd" | "article" | "video" | "custom";
 };
 
-const builtInFolders: WorkflowFolder[] = [
-    { id: "pdd", title: "电商工作流", description: "商品图生成、mockup、主图和待上架目录管理。", href: "/workflows/ecommerce", kind: "pdd" },
-];
+const builtInFolders: WorkflowFolder[] = [{ id: "pdd", title: "电商工作流", description: "商品图生成、mockup、主图和待上架目录管理。", href: "/workflows/ecommerce", kind: "pdd" }];
 
 export default function WorkflowsPage() {
     const { message } = App.useApp();
@@ -138,7 +136,7 @@ export default function WorkflowsPage() {
             </div>
 
             <Modal title="新建工作流文件夹" open={open} onCancel={() => setOpen(false)} onOk={saveFolder} okText="创建" cancelText="取消" confirmLoading={saveMutation.isPending}>
-                <Space direction="vertical" className="w-full">
+                <Space orientation="vertical" className="w-full">
                     <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：文章工作流、视频工作流" />
                     <Input.TextArea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} placeholder="文件夹说明，可留空" />
                     <Typography.Text type="secondary" className="text-xs">

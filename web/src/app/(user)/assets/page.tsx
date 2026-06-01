@@ -515,195 +515,229 @@ export default function AssetsPage() {
                                 key: "mine",
                                 label: "我的素材",
                                 children: (
-	                                    <div className="grid gap-6 xl:grid-cols-[220px_minmax(0,1fr)]">
-	                                        <MediaFilterSidebar
-	                                            value={localKindFilter}
-	                                            onChange={(value) => {
-	                                                setLocalPage(1);
-	                                                setLocalKindFilter(value);
-	                                                setLocalPurpose("");
-	                                            }}
-	                                        />
-	                                        <div className="space-y-6">
-                                                <LocalWorkspaceStatusAlert message="我的素材现在以本地工作区为事实源" />
-                                                {localAssetsError && localWorkspaceStatus === "connected" ? <Alert type="error" showIcon message={localAssetsError} /> : null}
-                                                {localWorkspace ? <Alert type="info" showIcon message={`当前工作区：${localWorkspace.name}`} /> : null}
-	                                            <div className="rounded-2xl border border-stone-200 bg-background/80 p-4 dark:border-stone-800 dark:bg-stone-950/60">
-	                                                <div className="space-y-4">
-	                                                    <Input.Search
-	                                                        allowClear
-	                                                        prefix={<Search className="size-4 text-stone-400" />}
-	                                                        value={localKeyword}
-	                                                        placeholder="搜索标题、内容、自由标签或来源"
-	                                                        onChange={(event) => {
-	                                                            setLocalPage(1);
-	                                                            setLocalKeyword(event.target.value);
-	                                                        }}
-	                                                        onSearch={(value) => {
-	                                                            setLocalPage(1);
-	                                                            setLocalKeyword(value);
-	                                                        }}
-	                                                    />
-	                                                    <div className="grid gap-3 md:grid-cols-3">
-	                                                        <Select
-	                                                            value={localPurpose}
-	                                                            options={assetPurposeOptionsForMedia(localKindFilter)}
-	                                                            onChange={(value) => {
-	                                                                setLocalPage(1);
-	                                                                setLocalPurpose(value);
-	                                                            }}
-	                                                        />
-	                                                        <Select
-	                                                            value={localSource}
-	                                                            options={assetSourceOptions}
-	                                                            onChange={(value) => {
-	                                                                setLocalPage(1);
-	                                                                setLocalSource(value);
-	                                                            }}
-	                                                        />
-	                                                        <Select
-	                                                            mode="tags"
-	                                                            tokenSeparators={[",", "，"]}
-	                                                            allowClear
-	                                                            maxTagCount="responsive"
-	                                                            value={localTags}
-	                                                            options={localAvailableTags.map((tag) => ({ label: tag, value: tag }))}
-	                                                            placeholder="自由标签"
-	                                                            onChange={(value) => {
-	                                                                setLocalPage(1);
-	                                                                setLocalTags(value);
-	                                                            }}
-	                                                        />
-	                                                    </div>
-	                                                    <div className="flex flex-wrap items-center justify-between gap-3">
-	                                                        <div className="text-xs text-stone-500 dark:text-stone-400">当前可选：{assetPurposeOptionsForMedia(localKindFilter).length - 1} 个用途、{localAvailableTags.length} 个自由标签</div>
-	                                                        <div className="flex flex-wrap gap-4">
-	                                                            <button type="button" className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300" onClick={resetLocalFilters}>
-	                                                                重置筛选
-	                                                            </button>
-	                                                            <button type="button" className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300" onClick={() => void exportAllLocalAssets()}>
-	                                                                导出素材
-	                                                            </button>
-	                                                            <button type="button" className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300" onClick={() => packageInputRef.current?.click()}>
-	                                                                导入素材包
-	                                                            </button>
-	                                                            <button type="button" className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300" onClick={openCreateLocalAsset}>
-	                                                                新增素材
-	                                                            </button>
-	                                                        </div>
-	                                                    </div>
-	                                                </div>
-	                                            </div>
-
-                                        {localAssetsLoading ? (
-                                            <div className="flex h-60 items-center justify-center">
-                                                <Spin />
+                                    <div className="grid gap-6 xl:grid-cols-[220px_minmax(0,1fr)]">
+                                        <MediaFilterSidebar
+                                            value={localKindFilter}
+                                            onChange={(value) => {
+                                                setLocalPage(1);
+                                                setLocalKindFilter(value);
+                                                setLocalPurpose("");
+                                            }}
+                                        />
+                                        <div className="space-y-6">
+                                            <LocalWorkspaceStatusAlert message="我的素材现在以本地工作区为事实源" />
+                                            {localAssetsError && localWorkspaceStatus === "connected" ? <Alert type="error" showIcon title={localAssetsError} /> : null}
+                                            {localWorkspace ? <Alert type="info" showIcon title={`当前工作区：${localWorkspace.name}`} /> : null}
+                                            <div className="rounded-2xl border border-stone-200 bg-background/80 p-4 dark:border-stone-800 dark:bg-stone-950/60">
+                                                <div className="space-y-4">
+                                                    <Input.Search
+                                                        allowClear
+                                                        prefix={<Search className="size-4 text-stone-400" />}
+                                                        value={localKeyword}
+                                                        placeholder="搜索标题、内容、自由标签或来源"
+                                                        onChange={(event) => {
+                                                            setLocalPage(1);
+                                                            setLocalKeyword(event.target.value);
+                                                        }}
+                                                        onSearch={(value) => {
+                                                            setLocalPage(1);
+                                                            setLocalKeyword(value);
+                                                        }}
+                                                    />
+                                                    <div className="grid gap-3 md:grid-cols-3">
+                                                        <Select
+                                                            value={localPurpose}
+                                                            options={assetPurposeOptionsForMedia(localKindFilter)}
+                                                            onChange={(value) => {
+                                                                setLocalPage(1);
+                                                                setLocalPurpose(value);
+                                                            }}
+                                                        />
+                                                        <Select
+                                                            value={localSource}
+                                                            options={assetSourceOptions}
+                                                            onChange={(value) => {
+                                                                setLocalPage(1);
+                                                                setLocalSource(value);
+                                                            }}
+                                                        />
+                                                        <Select
+                                                            mode="tags"
+                                                            tokenSeparators={[",", "，"]}
+                                                            allowClear
+                                                            maxTagCount="responsive"
+                                                            value={localTags}
+                                                            options={localAvailableTags.map((tag) => ({ label: tag, value: tag }))}
+                                                            placeholder="自由标签"
+                                                            onChange={(value) => {
+                                                                setLocalPage(1);
+                                                                setLocalTags(value);
+                                                            }}
+                                                        />
+                                                    </div>
+                                                    <div className="flex flex-wrap items-center justify-between gap-3">
+                                                        <div className="text-xs text-stone-500 dark:text-stone-400">
+                                                            当前可选：{assetPurposeOptionsForMedia(localKindFilter).length - 1} 个用途、{localAvailableTags.length} 个自由标签
+                                                        </div>
+                                                        <div className="flex flex-wrap gap-4">
+                                                            <button
+                                                                type="button"
+                                                                className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
+                                                                onClick={resetLocalFilters}
+                                                            >
+                                                                重置筛选
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
+                                                                onClick={() => void exportAllLocalAssets()}
+                                                            >
+                                                                导出素材
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
+                                                                onClick={() => packageInputRef.current?.click()}
+                                                            >
+                                                                导入素材包
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
+                                                                onClick={openCreateLocalAsset}
+                                                            >
+                                                                新增素材
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
                                             </div>
-                                        ) : (
-	                                        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                                            {visibleLocalAssets.map((asset) => (
-                                                <AssetCard key={asset.id} asset={asset} onOpen={() => setPreviewLocalAsset(asset)} onEdit={() => openEditLocalAsset(asset)} onCopy={copyLocalAssetText} onDownload={downloadLocalAsset} onDelete={() => setDeletingLocalAsset(asset)} />
-                                            ))}
+
+                                            {localAssetsLoading ? (
+                                                <div className="flex h-60 items-center justify-center">
+                                                    <Spin />
+                                                </div>
+                                            ) : (
+                                                <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                                                    {visibleLocalAssets.map((asset) => (
+                                                        <AssetCard
+                                                            key={asset.id}
+                                                            asset={asset}
+                                                            onOpen={() => setPreviewLocalAsset(asset)}
+                                                            onEdit={() => openEditLocalAsset(asset)}
+                                                            onCopy={copyLocalAssetText}
+                                                            onDownload={downloadLocalAsset}
+                                                            onDelete={() => setDeletingLocalAsset(asset)}
+                                                        />
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            {!localAssetsLoading && !visibleLocalAssets.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有找到素材" className="py-20" /> : null}
+
+                                            <div className="flex justify-center">
+                                                <Pagination
+                                                    current={localPage}
+                                                    pageSize={localPageSize}
+                                                    total={filteredLocalAssets.length}
+                                                    showSizeChanger
+                                                    pageSizeOptions={[10, 20, 50, 100]}
+                                                    onChange={(nextPage, nextPageSize) => {
+                                                        setLocalPage(nextPage);
+                                                        setLocalPageSize(nextPageSize);
+                                                    }}
+                                                />
+                                            </div>
                                         </div>
-                                        )}
-
-                                        {!localAssetsLoading && !visibleLocalAssets.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有找到素材" className="py-20" /> : null}
-
-                                        <div className="flex justify-center">
-                                            <Pagination
-                                                current={localPage}
-                                                pageSize={localPageSize}
-                                                total={filteredLocalAssets.length}
-                                                showSizeChanger
-                                                pageSizeOptions={[10, 20, 50, 100]}
-                                                onChange={(nextPage, nextPageSize) => {
-                                                    setLocalPage(nextPage);
-                                                    setLocalPageSize(nextPageSize);
-                                                }}
-	                                            />
-	                                        </div>
-	                                        </div>
-	                                    </div>
+                                    </div>
                                 ),
                             },
                             {
                                 key: "library",
                                 label: "素材库",
                                 children: (
-	                                    <div className="grid gap-6 xl:grid-cols-[220px_minmax(0,1fr)]">
-	                                        <MediaFilterSidebar
-	                                            value={libraryKindFilter}
-	                                            onChange={(value) => {
-	                                                setLibraryPage(1);
-	                                                setLibraryKindFilter(value);
-	                                                setLibraryPurpose("");
-	                                            }}
-	                                        />
-	                                        <div className="space-y-6">
-	                                            <div className="rounded-2xl border border-stone-200 bg-background/80 p-4 dark:border-stone-800 dark:bg-stone-950/60">
-	                                                <div className="space-y-4">
-	                                                    <Input.Search
-	                                                        allowClear
-	                                                        prefix={<Search className="size-4 text-stone-400" />}
-	                                                        value={libraryKeyword}
-	                                                        placeholder="搜索标题、描述、自由标签或 URL"
-	                                                        onChange={(event) => {
-	                                                            setLibraryPage(1);
-	                                                            setLibraryKeyword(event.target.value);
-	                                                        }}
-	                                                        onSearch={(value) => {
-	                                                            setLibraryPage(1);
-	                                                            setLibraryKeyword(value);
-	                                                        }}
-	                                                    />
-	                                                        <div className="grid gap-3 md:grid-cols-3">
-	                                                            <Select
-	                                                                value={libraryPurpose}
-	                                                                options={assetPurposeOptionsForMedia(libraryKindFilter).filter((option) => !option.value || !libraryFacets?.purposes?.length || libraryFacets.purposes.includes(option.value))}
-	                                                                onChange={(value) => {
-	                                                                    setLibraryPage(1);
-	                                                                    setLibraryPurpose(value);
-                                                                }}
-                                                            />
-                                                            <Select
-                                                                value={librarySource}
-                                                                options={assetSourceOptions}
-                                                                onChange={(value) => {
-                                                                    setLibraryPage(1);
-                                                                    setLibrarySource(value);
-                                                                }}
-                                                            />
-	                                                            <Select
-	                                                                mode="tags"
-	                                                                tokenSeparators={[",", "，"]}
-	                                                                allowClear
-                                                                maxTagCount="responsive"
-                                                                value={libraryTags}
-                                                                options={libraryAvailableTags.map((tag) => ({ label: tag, value: tag }))}
-                                                                placeholder="自由标签"
-                                                                onChange={(value) => {
-                                                                    setLibraryPage(1);
-                                                                    setLibraryTags(value);
-                                                                }}
-                                                            />
+                                    <div className="grid gap-6 xl:grid-cols-[220px_minmax(0,1fr)]">
+                                        <MediaFilterSidebar
+                                            value={libraryKindFilter}
+                                            onChange={(value) => {
+                                                setLibraryPage(1);
+                                                setLibraryKindFilter(value);
+                                                setLibraryPurpose("");
+                                            }}
+                                        />
+                                        <div className="space-y-6">
+                                            <div className="rounded-2xl border border-stone-200 bg-background/80 p-4 dark:border-stone-800 dark:bg-stone-950/60">
+                                                <div className="space-y-4">
+                                                    <Input.Search
+                                                        allowClear
+                                                        prefix={<Search className="size-4 text-stone-400" />}
+                                                        value={libraryKeyword}
+                                                        placeholder="搜索标题、描述、自由标签或 URL"
+                                                        onChange={(event) => {
+                                                            setLibraryPage(1);
+                                                            setLibraryKeyword(event.target.value);
+                                                        }}
+                                                        onSearch={(value) => {
+                                                            setLibraryPage(1);
+                                                            setLibraryKeyword(value);
+                                                        }}
+                                                    />
+                                                    <div className="grid gap-3 md:grid-cols-3">
+                                                        <Select
+                                                            value={libraryPurpose}
+                                                            options={assetPurposeOptionsForMedia(libraryKindFilter).filter((option) => !option.value || !libraryFacets?.purposes?.length || libraryFacets.purposes.includes(option.value))}
+                                                            onChange={(value) => {
+                                                                setLibraryPage(1);
+                                                                setLibraryPurpose(value);
+                                                            }}
+                                                        />
+                                                        <Select
+                                                            value={librarySource}
+                                                            options={assetSourceOptions}
+                                                            onChange={(value) => {
+                                                                setLibraryPage(1);
+                                                                setLibrarySource(value);
+                                                            }}
+                                                        />
+                                                        <Select
+                                                            mode="tags"
+                                                            tokenSeparators={[",", "，"]}
+                                                            allowClear
+                                                            maxTagCount="responsive"
+                                                            value={libraryTags}
+                                                            options={libraryAvailableTags.map((tag) => ({ label: tag, value: tag }))}
+                                                            placeholder="自由标签"
+                                                            onChange={(value) => {
+                                                                setLibraryPage(1);
+                                                                setLibraryTags(value);
+                                                            }}
+                                                        />
+                                                    </div>
+                                                    <div className="flex flex-wrap items-center justify-between gap-3">
+                                                        <div className="text-xs text-stone-500 dark:text-stone-400">
+                                                            当前可选：{libraryFacets?.purposes?.length || 0} 个用途、{libraryAvailableTags.length} 个自由标签
                                                         </div>
-	                                                        <div className="flex flex-wrap items-center justify-between gap-3">
-	                                                            <div className="text-xs text-stone-500 dark:text-stone-400">
-	                                                                当前可选：{libraryFacets?.purposes?.length || 0} 个用途、{libraryAvailableTags.length} 个自由标签
-	                                                            </div>
-                                                            <div className="flex flex-wrap gap-4">
-                                                                <button type="button" className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300" onClick={resetLibraryFilters}>
-                                                                    重置筛选
+                                                        <div className="flex flex-wrap gap-4">
+                                                            <button
+                                                                type="button"
+                                                                className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
+                                                                onClick={resetLibraryFilters}
+                                                            >
+                                                                重置筛选
+                                                            </button>
+                                                            {isAdmin ? (
+                                                                <button
+                                                                    type="button"
+                                                                    className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
+                                                                    onClick={openCreateLibraryAsset}
+                                                                >
+                                                                    新增素材库素材
                                                                 </button>
-                                                                {isAdmin ? (
-                                                                    <button type="button" className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300" onClick={openCreateLibraryAsset}>
-                                                                        新增素材库素材
-                                                                    </button>
-                                                                ) : null}
-                                                            </div>
+                                                            ) : null}
                                                         </div>
                                                     </div>
                                                 </div>
+                                            </div>
 
                                             {libraryQuery.isLoading ? (
                                                 <div className="flex h-60 items-center justify-center">
@@ -809,7 +843,11 @@ export default function AssetsPage() {
                             </Form.Item>
                         ) : (
                             <>
-                                <Form.Item name="url" label={localFormKind === "video" ? "视频 URL" : "图片 URL"} rules={[{ required: !imageDraft && !videoDraft, message: localFormKind === "video" ? "请输入视频 URL 或上传视频文件" : "请输入图片 URL 或上传图片文件" }]}>
+                                <Form.Item
+                                    name="url"
+                                    label={localFormKind === "video" ? "视频 URL" : "图片 URL"}
+                                    rules={[{ required: !imageDraft && !videoDraft, message: localFormKind === "video" ? "请输入视频 URL 或上传视频文件" : "请输入图片 URL 或上传图片文件" }]}
+                                >
                                     <Input placeholder={localFormKind === "video" ? "可粘贴视频 URL，也可以上传本地视频" : "可粘贴图片 URL，也可以上传本地图片"} />
                                 </Form.Item>
                                 <div className="rounded-lg border border-dashed border-stone-300 p-4 dark:border-stone-700">
@@ -1009,7 +1047,25 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { as
     );
 }
 
-function LibraryAssetCard({ asset, isAdmin, onOpen, onCopy, onDownload, onCopyToMine, onEdit, onDelete }: { asset: AssetLibraryItem; isAdmin: boolean; onOpen: () => void; onCopy: () => void; onDownload: () => void; onCopyToMine: () => void; onEdit: () => void; onDelete: () => void }) {
+function LibraryAssetCard({
+    asset,
+    isAdmin,
+    onOpen,
+    onCopy,
+    onDownload,
+    onCopyToMine,
+    onEdit,
+    onDelete,
+}: {
+    asset: AssetLibraryItem;
+    isAdmin: boolean;
+    onOpen: () => void;
+    onCopy: () => void;
+    onDownload: () => void;
+    onCopyToMine: () => void;
+    onEdit: () => void;
+    onDelete: () => void;
+}) {
     const cover = asset.coverUrl || asset.url;
     return (
         <Card hoverable className="overflow-hidden" styles={{ body: { padding: 0 } }} cover={<AssetCover title={asset.title} cover={cover} fallback={asset.type === "text" ? asset.content : "暂无封面"} onOpen={onOpen} />}>
@@ -1157,7 +1213,25 @@ function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | nu
     );
 }
 
-function LibraryAssetDrawer({ asset, isAdmin, onClose, onCopy, onDownload, onCopyToMine, onEdit, onDelete }: { asset: AssetLibraryItem | null; isAdmin: boolean; onClose: () => void; onCopy: (asset: AssetLibraryItem) => void; onDownload: (asset: AssetLibraryItem) => void; onCopyToMine: (asset: AssetLibraryItem) => void; onEdit: (asset: AssetLibraryItem) => void; onDelete: (asset: AssetLibraryItem) => void }) {
+function LibraryAssetDrawer({
+    asset,
+    isAdmin,
+    onClose,
+    onCopy,
+    onDownload,
+    onCopyToMine,
+    onEdit,
+    onDelete,
+}: {
+    asset: AssetLibraryItem | null;
+    isAdmin: boolean;
+    onClose: () => void;
+    onCopy: (asset: AssetLibraryItem) => void;
+    onDownload: (asset: AssetLibraryItem) => void;
+    onCopyToMine: (asset: AssetLibraryItem) => void;
+    onEdit: (asset: AssetLibraryItem) => void;
+    onDelete: (asset: AssetLibraryItem) => void;
+}) {
     const cover = asset?.coverUrl || asset?.url || "";
     return (
         <Drawer title="素材库详情" open={Boolean(asset)} size="large" onClose={onClose}>
